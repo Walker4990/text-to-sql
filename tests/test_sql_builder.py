@@ -400,6 +400,8 @@ def test_not_implemented_kind_is_unsupported(kind: str) -> None:
     ],
 )
 def test_name_keyword_wildcards_are_escaped(keyword: str, expected: str) -> None:
-    result = make_builder().build(Intent(kind="lookup", target_type="기본상품", name_keyword=keyword))
+    result = make_builder().build(
+        Intent(kind="lookup", target_type="기본상품", name_keyword=keyword)
+    )
     assert r"M.OBJ_NAME LIKE :name_keyword ESCAPE '\'" in flat(result.sql)
     assert result.params["name_keyword"] == expected
