@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "dialect": "postgresql",
+  "max_rows": 100,
+  "tables": {
+    "OBJ_MAIN": {
+      "label": "오브젝트 메인",
+      "version_column": "END_DT",
+      "version_value": "99991231"
+    },
+    "OBJ_INV": {
+      "label": "오브젝트 구조",
+      "version_column": "END_DT",
+      "version_value": "99991231"
+    },
+    "OBJ_DETAIL": {
+      "label": "오브젝트 속성",
+      "version_column": "END_DT",
+      "version_value": "99991231"
+    }
+  }
+}

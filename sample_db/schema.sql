@@ -1,0 +1,2 @@
+-- 로컬 PostgreSQL 샘플 스키마: OBJ_MAIN, OBJ_INV, OBJ_DETAIL, OBJ1000, OBJ1800, OBJ1810, OBJ1110, OBJ1200
+-- 식별자는 따옴표 없이 생성한다. 필요한 컬럼만 (CHAR01~CHAR05 정도)

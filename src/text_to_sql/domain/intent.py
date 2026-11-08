@@ -1,0 +1,43 @@
+"""의도(Intent) 모델: LLM이 추출하는 JSON의 스키마.
+
+- kind: lookup / list / structure / attribute / pattern / pattern_catalog / unsupported
+- 종류별 필수값 검증, code·name_keyword·base_date 형식 검증 (인젝션 첫 관문)"""
+
+from datetime import datetime
+from typing import Literal, Self
+
+from pydantic import BaseModel, Field, field_validator, model_validator
+
+
+class Intent(BaseModel):
+    kind: Literal[
+        "lookup", "list", "structure", "attribute", "pattern", "pattern_catalog", "unsupported"
+    ]
+    target_type: str | None = None
+    code: str | None = Field(default=None, pattern=r"^[A-Za-z0-9_.-]{1,32}$")
+    name_keyword: str | None = Field(default=None, max_length=50)
+    direction: Literal["parents", "children"] | None = None
+    base_date: str | None = None
+    reason: str | None = None
+
+    @field_validator("base_date")
+    @classmethod
+    def check_base_date(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        if len(value) != 8 or not value.isdigit():
+            raise ValueError("base_date는 YYYYMMDD 형식이어야 합니다.")
+        datetime.strptime(value, "%Y%m%d")
+        return value
+
+    @model_validator(mode="after")
+    def check_required_fileds(self) -> Self:
+        if self.kind == "lookup" and not (self.code or self.name_keyword):
+            raise ValueError("lookup에는 code 또는 name_keyword가 필요합니다")
+        if self.kind == "list" and not self.target_type:
+            raise ValueError("list에는 target_type이 필요합니다.")
+        if self.kind == "structure" and (
+            not self.target_type or not self.code or not self.direction
+        ):
+            raise ValueError("structure에는 target_type, code, direction이 모두 필요합니다.")
+        return self
