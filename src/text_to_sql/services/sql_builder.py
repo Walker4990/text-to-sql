@@ -11,8 +11,8 @@ from text_to_sql.domain.intent import Intent
 from text_to_sql.errors import UnsupportedQuestionError
 from text_to_sql.repositories.metadata_repository import Metadata, SiteProfile
 
-# 템플릿이 있는 질문 종류 (T1 lookup, T2 list, T3·T4 structure)
-_IMPLEMENTED_KINDS = frozenset({"lookup", "list", "structure"})
+# 템플릿이 있는 질문 종류 (T1 lookup, T2 list, T3·T4 structure, T5 attribute)
+_IMPLEMENTED_KINDS = frozenset({"lookup", "list", "structure", "attribute"})
 
 
 # [스프링] 응답 VO. build()가 돌려주는 결과 묶음
@@ -43,6 +43,8 @@ class SqlBuilder:
             raise UnsupportedQuestionError(f"아직 지원하지 않는 질문 종류입니다: {intent.kind}")
         if intent.kind == "structure":
             return self.build_structure(intent)
+        if intent.kind == "attribute":
+            return self.build_attribute(intent)
         if intent.target_type is None:
             raise UnsupportedQuestionError("유형이 없습니다.")
 
@@ -110,6 +112,42 @@ class SqlBuilder:
             f"ORDER BY {result}.BIZCODE"
         )
 
+        return BuiltSql(sql=query, params=params)
+
+    def build_attribute(self, intent: Intent) -> BuiltSql:
+        if intent.target_type is None:
+            raise UnsupportedQuestionError("유형이 없습니다.")
+        type_id = self.profile.find_typeid(intent.target_type)
+        names = list(dict.fromkeys(intent.attributes or []))
+        items = [(name, self.profile.find_item(intent.target_type, name)) for name in names]
+        main = self.common.find_table("OBJ_MAIN")
+        detail = self.common.find_table("OBJ_DETAIL")
+        m = self.profile.table_aliases["main"]
+        d = self.profile.table_aliases["detail"]
+
+        # 항목 컬럼·별칭은 사전에서 검증된 값만 들어온다 (바인드 불가 위치라 직접 삽입)
+        columns = [f"{m}.BIZCODE", f"{m}.OBJ_NAME"]
+        columns += [f'{d}.{item.column} "{name}"' for name, item in items]
+        conditions = [f"{m}.TYPEID = :type_id"]
+        params: dict[str, object] = {"type_id": type_id}
+        if intent.code:
+            conditions.append(f"{m}.BIZCODE = :code")
+            params["code"] = intent.code
+        elif intent.name_keyword:
+            conditions.append(f"{m}.OBJ_NAME LIKE :name_keyword ESCAPE '\\'")
+            params["name_keyword"] = f"%{_escape_like(intent.name_keyword)}%"
+        # KIND = 1: 오브젝트 기본 속성 행
+        conditions.append(f"{d}.KIND = :detail_kind")
+        params["detail_kind"] = 1
+        conditions.append(f"{m}.{main.version_column} = '{main.version_value}'")
+        conditions.append(f"{d}.{detail.version_column} = '{detail.version_value}'")
+
+        query = (
+            f"SELECT {', '.join(columns)} "
+            f"FROM OBJ_MAIN {m} JOIN OBJ_DETAIL {d} ON {d}.SID = {m}.SID "
+            f"WHERE {' AND '.join(conditions)} "
+            f"ORDER BY {m}.BIZCODE"
+        )
         return BuiltSql(sql=query, params=params)
 
 

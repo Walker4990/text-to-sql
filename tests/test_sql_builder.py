@@ -378,9 +378,10 @@ def test_structure_parents_uses_custom_aliases() -> None:
 # ───────────── 보완 (2026-11-08) ─────────────
 
 
-# 문제 31: 아직 만들지 않은 질문 종류는 거절한다 (attribute, pattern, pattern_catalog)
+# 문제 31: 아직 만들지 않은 질문 종류는 거절한다 (pattern, pattern_catalog)
+# (attribute는 T5로 구현했다. tests/test_attribute.py)
 # 이전에는 lookup처럼 처리되어 코드 조건 없이 유형 전체를 조회하는 SQL이 조용히 나왔다
-@pytest.mark.parametrize("kind", ["attribute", "pattern", "pattern_catalog"])
+@pytest.mark.parametrize("kind", ["pattern", "pattern_catalog"])
 def test_not_implemented_kind_is_unsupported(kind: str) -> None:
     intent = Intent.model_validate({"kind": kind, "target_type": "기본상품", "code": "BP001"})
     with pytest.raises(UnsupportedQuestionError):

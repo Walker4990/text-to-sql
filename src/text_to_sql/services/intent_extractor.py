@@ -12,18 +12,21 @@ from text_to_sql.repositories.metadata_repository import SiteProfile
 
 _SCHEMA = """
 [출력 스키마]
-- kind: "lookup"(단건) | "list"(목록) | "structure"(연결 구조) | "unsupported"(지원 안 함)
+- kind: "lookup"(단건) | "list"(목록) | "structure"(연결 구조)
+        | "attribute"(속성 값) | "unsupported"(지원 안 함)
 - target_type: 위 유형 이름 중 하나
 - code: 오브젝트 코드 (영문·숫자·_.- 1~32자)
 - name_keyword: 이름 검색어 (50자 이하)
 - direction: structure 전용. "children"(하위) | "parents"(상위)
 - base_date: 기준일자 YYYYMMDD (질문에 날짜가 있을 때만)
+- attributes: attribute 전용. 조회할 항목 이름 목록 ([항목]에 있는 이름만)
 - reason: unsupported일 때 사유
 
 [필수값]
 - lookup: target_type + (code 또는 name_keyword)
 - list: target_type
 - structure: target_type + code + direction
+- attribute: target_type + (code 또는 name_keyword) + attributes
 """
 
 _RULES = """
@@ -61,6 +64,10 @@ def build_system_prompt(profile: SiteProfile) -> str:
     for alias, name in profile.aliases.items():
         if alias != name:
             lines.append(f"{alias} -> {name}")
+    if profile.items:
+        lines.append("[항목]")
+        for type_name, type_items in profile.items.items():
+            lines.append(f"{type_name}: {', '.join(type_items)}")
     lines.append(_SCHEMA)
     lines.append(_build_examples(profile))
     lines.append(_RULES)
@@ -74,6 +81,16 @@ def _build_examples(profile: SiteProfile) -> str:
     type_names = list(profile.types)
     first = type_names[0]
     second = type_names[1] if len(type_names) > 1 else first
+    attribute_example: list[str] = []
+    for type_name, type_items in profile.items.items():
+        if type_items:
+            item = next(iter(type_items))
+            attribute_example = [
+                f"질문: A001 {type_name}의 {item} 알려줘",
+                f'출력: {{"kind": "attribute", "target_type": "{type_name}", "code": "A001", '
+                f'"attributes": ["{item}"]}}',
+            ]
+            break
     return "\n".join(
         [
             "[예시]",
@@ -84,6 +101,7 @@ def _build_examples(profile: SiteProfile) -> str:
             f"질문: A001 {first}에 연결된 하위 오브젝트",
             f'출력: {{"kind": "structure", "target_type": "{first}", "code": "A001", '
             '"direction": "children"}',
+            *attribute_example,
             "질문: 오늘 날씨 어때",
             '출력: {"kind": "unsupported", "reason": "상품 DB 질문이 아님"}',
         ]

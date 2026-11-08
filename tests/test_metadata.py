@@ -70,8 +70,9 @@ def test_load_site_profile_alias_points_to_unknown_type(tmp_path: Path) -> None:
 
 # ---------------------------------------------------------------------------
 # 테이블 별칭 (table_aliases): SQL 안에서 OBJ_MAIN 등에 붙이는 별칭. 현장 개발 가이드마다 다르다
-#   키: main(T1·T2의 OBJ_MAIN), parent(상위 OBJ_MAIN), inv(OBJ_INV), child(하위 OBJ_MAIN)
-#   기본값: main=M, parent=P, inv=I, child=C
+#   키: main(T1·T2·T5의 OBJ_MAIN), parent(상위 OBJ_MAIN), inv(OBJ_INV), child(하위 OBJ_MAIN),
+#       detail(T5의 OBJ_DETAIL)
+#   기본값: main=M, parent=P, inv=I, child=C, detail=D
 # 별칭은 SQL 글자에 그대로 들어가므로, 프로필을 읽을 때 형식을 검사해야 한다.
 # ---------------------------------------------------------------------------
 
@@ -92,20 +93,38 @@ def write_profile(tmp_path: Path, table_aliases: str | None) -> str:
 # 별칭 문제 1: 파일에 table_aliases가 없으면 기본값(M, P, I, C)을 쓴다
 def test_table_aliases_default() -> None:
     profile = load_site_profile("src/text_to_sql/metadata/sites/sample.json")
-    assert profile.table_aliases == {"main": "M", "parent": "P", "inv": "I", "child": "C"}
+    assert profile.table_aliases == {
+        "main": "M",
+        "parent": "P",
+        "inv": "I",
+        "child": "C",
+        "detail": "D",
+    }
 
 
 # 별칭 문제 2: 일부만 적으면 나머지는 기본값이 유지된다
 def test_table_aliases_partial_override(tmp_path: Path) -> None:
     profile = load_site_profile(write_profile(tmp_path, '{ "main": "OMA" }'))
-    assert profile.table_aliases == {"main": "OMA", "parent": "P", "inv": "I", "child": "C"}
+    assert profile.table_aliases == {
+        "main": "OMA",
+        "parent": "P",
+        "inv": "I",
+        "child": "C",
+        "detail": "D",
+    }
 
 
 # 별칭 문제 3: 전부 바꿀 수 있다
 def test_table_aliases_full_override(tmp_path: Path) -> None:
     text = '{ "main": "OMA", "parent": "OMC", "inv": "OI", "child": "OMB" }'
     profile = load_site_profile(write_profile(tmp_path, text))
-    assert profile.table_aliases == {"main": "OMA", "parent": "OMC", "inv": "OI", "child": "OMB"}
+    assert profile.table_aliases == {
+        "main": "OMA",
+        "parent": "OMC",
+        "inv": "OI",
+        "child": "OMB",
+        "detail": "D",
+    }
 
 
 # 별칭 문제 4 (보안): 테이블 이름과 같은 규칙(영문 대문자로 시작, 대문자·숫자·밑줄)만 허용한다

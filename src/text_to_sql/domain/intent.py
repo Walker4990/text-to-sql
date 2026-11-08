@@ -3,6 +3,7 @@
 - kind: lookup / list / structure / attribute / pattern / pattern_catalog / unsupported
 - 종류별 필수값 검증, code·name_keyword·base_date 형식 검증 (인젝션 첫 관문)"""
 
+import re
 from datetime import datetime
 from typing import Literal, Self
 
@@ -19,6 +20,7 @@ class Intent(BaseModel):
     direction: Literal["parents", "children"] | None = None
     base_date: str | None = None
     reason: str | None = None
+    attributes: list[str] | None = Field(default=None, max_length=10)
 
     @field_validator("base_date")
     @classmethod
@@ -40,4 +42,20 @@ class Intent(BaseModel):
             not self.target_type or not self.code or not self.direction
         ):
             raise ValueError("structure에는 target_type, code, direction이 모두 필요합니다.")
+        if self.kind == "attribute" and (
+            not self.target_type or not (self.code or self.name_keyword) or not self.attributes
+        ):
+            raise ValueError(
+                "attribute에는 target_type, code 또는 name_keyword, attributes가 필요합니다."
+            )
         return self
+
+    @field_validator("attributes")
+    @classmethod
+    def check_attributes(cls, value: list[str] | None) -> list[str] | None:
+        if value is None:
+            return value
+        for name in value:
+            if not re.fullmatch(r"[가-힣A-Za-z0-9_]{1,30}", name):
+                raise ValueError(f"항목 이름 형식이 잘못되었습니다: {name!r}")
+        return value

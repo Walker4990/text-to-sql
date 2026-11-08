@@ -9,7 +9,15 @@ from dataclasses import dataclass, field
 
 from text_to_sql.errors import MetadataError, UnsupportedQuestionError
 
-DEFAULT_TABLE_ALIASES = {"main": "M", "parent": "P", "inv": "I", "child": "C"}
+DEFAULT_TABLE_ALIASES = {"main": "M", "parent": "P", "inv": "I", "child": "C", "detail": "D"}
+_ITEM_NAME = re.compile(r"[가-힣A-Za-z0-9_]{1,30}")
+_ITEM_COLUMN = re.compile(r"(?:CHAR|TEXT|DESC)\d{2,3}")
+
+
+@dataclass(frozen=True)
+class ItemDef:
+    column: str
+    multi: bool = False
 
 
 # [스프링] Lombok @Data를 붙인 VO 클래스. 필드는 site, types, aliases 3개
@@ -20,6 +28,7 @@ class SiteProfile:
     types: dict[str, int]
     aliases: dict[str, str]
     table_aliases: dict[str, str] = field(default_factory=lambda: dict(DEFAULT_TABLE_ALIASES))
+    items: dict[str, dict[str, ItemDef]] = field(default_factory=dict)
 
     # [스프링] public int findTypeid(String typeName) 인스턴스 메서드 (self = this)
     # 이름이나 별칭으로 TYPEID를 찾는다. 없으면 UnsupportedQuestionError
@@ -40,6 +49,15 @@ class SiteProfile:
             return self.aliases[alias_name]
         except KeyError as err:
             raise UnsupportedQuestionError(f"Alias not found: {alias_name}") from err
+
+    def find_item(self, type_name: str, item_name: str) -> ItemDef:
+        standard = self.find_alias(type_name)
+        item = self.items.get(standard, {}).get(item_name)
+        if item is None:
+            raise UnsupportedQuestionError(f"'{standard}' 유형에 '{item_name}' 항목이 없습니다")
+        if item.multi:
+            raise UnsupportedQuestionError(f"다중값 항목은 아직 지원하지 않습니다: {item_name}")
+        return item
 
 
 @dataclass
@@ -90,12 +108,29 @@ def load_site_profile(path: str) -> SiteProfile:
             if not isinstance(alias, str) or not re.fullmatch(r"[A-Z][A-Z0-9_]*", alias):
                 raise MetadataError(f"Invalid table alias '{alias}' for '{role}' in file: {path}")
 
+        items: dict[str, dict[str, ItemDef]] = {}
+        for type_name, type_items in data.get("items", {}).items():
+            if type_name not in data["types"]:
+                raise MetadataError(f"Items for unknown type '{type_name}' in file: {path}")
+            items[type_name] = {}
+            for item_name, spec in type_items.items():
+                if not _ITEM_NAME.fullmatch(item_name):
+                    raise MetadataError(f"Invalid item name '{item_name}' in file: {path}")
+                column = spec["column"]
+                if not isinstance(column, str) or not _ITEM_COLUMN.fullmatch(column):
+                    raise MetadataError(f"Invalid column '{column}' in file: {path}")
+                multi = spec.get("multi", False)
+                if not isinstance(multi, bool):
+                    raise MetadataError(f"multi must be true/false in file: {path}")
+                items[type_name][item_name] = ItemDef(column=column, multi=multi)
+
         # [스프링] new SiteProfile(site, types, aliases). data["키"]에 키가 없으면 KeyError
         return SiteProfile(
             site=data["site"],
             types=data["types"],
             aliases=data["aliases"],
             table_aliases=table_aliases,
+            items=items,
         )
     # [스프링] catch (FileNotFoundException e) { throw new MetadataException(msg, e); }
     # "from err"는 원래 예외를 cause로 연결한다 (new X(msg, cause))
