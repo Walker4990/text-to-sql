@@ -19,9 +19,11 @@ def test_find_typeid() -> None:
     assert profile.find_typeid("기본상품") == 901
     assert profile.find_alias("옵션") == "부가옵션"
 
+
 def test_find_typeid_by_alias() -> None:
     profile = load_site_profile("src/text_to_sql/metadata/sites/sample.json")
     assert profile.find_typeid("옵션") == 903
+
 
 def test_find_typeid_unknown_type() -> None:
     profile = load_site_profile("src/text_to_sql/metadata/sites/sample.json")
@@ -29,10 +31,12 @@ def test_find_typeid_unknown_type() -> None:
     with pytest.raises(UnsupportedQuestionError):
         profile.find_typeid("unknown_type")
 
+
 def test_find_alias_unknown_alias() -> None:
     profile = load_site_profile("src/text_to_sql/metadata/sites/sample.json")
     with pytest.raises(UnsupportedQuestionError):
         profile.find_alias("unknown_alias")
+
 
 def test_load_site_profile_file_not_found() -> None:
     with pytest.raises(MetadataError):
@@ -62,6 +66,7 @@ def test_load_site_profile_alias_points_to_unknown_type(tmp_path: Path) -> None:
     )
     with pytest.raises(MetadataError):
         load_site_profile(str(inconsistent))
+
 
 # ---------------------------------------------------------------------------
 # 테이블 별칭 (table_aliases): SQL 안에서 OBJ_MAIN 등에 붙이는 별칭. 현장 개발 가이드마다 다르다

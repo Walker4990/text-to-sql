@@ -175,9 +175,7 @@ def test_list_with_name_keyword() -> None:
 # 문제 15: 기준일자가 있을 때만 적용기간 조건이 붙는다 (T1과 같은 규칙)
 def test_list_with_base_date() -> None:
     builder = make_builder()
-    with_date = builder.build(
-        Intent(kind="list", target_type="부가옵션", base_date="20261102")
-    )
+    with_date = builder.build(Intent(kind="list", target_type="부가옵션", base_date="20261102"))
     assert ":base_dt BETWEEN M.VF_DT AND M.VT_DT" in flat(with_date.sql)
 
     without_date = builder.build(Intent(kind="list", target_type="부가옵션"))
@@ -375,3 +373,33 @@ def test_structure_parents_uses_custom_aliases() -> None:
     assert "OMB.TYPEID = :type_id" in sql
     assert "OMB.BIZCODE = :code" in sql
     assert sql.endswith("ORDER BY OMA.BIZCODE")
+
+
+# ───────────── 보완 (2026-11-08) ─────────────
+
+
+# 문제 31: 아직 만들지 않은 질문 종류는 거절한다 (attribute, pattern, pattern_catalog)
+# 이전에는 lookup처럼 처리되어 코드 조건 없이 유형 전체를 조회하는 SQL이 조용히 나왔다
+@pytest.mark.parametrize("kind", ["attribute", "pattern", "pattern_catalog"])
+def test_not_implemented_kind_is_unsupported(kind: str) -> None:
+    intent = Intent.model_validate({"kind": kind, "target_type": "기본상품", "code": "BP001"})
+    with pytest.raises(UnsupportedQuestionError):
+        make_builder().build(intent)
+
+
+# 문제 32: 이름 검색어 안의 %, _, \ 는 글자 그대로 찾도록 이스케이프하고 ESCAPE 절을 붙인다
+# 이스케이프하지 않으면 "100%"가 와일드카드가 되어 "100"으로 시작하는 모든 이름이 걸린다
+@pytest.mark.parametrize(
+    ("keyword", "expected"),
+    [
+        # r"..."(raw 문자열): 백슬래시를 글자 그대로 쓴다
+        ("100%", r"%100\%%"),
+        ("A_B", r"%A\_B%"),
+        (r"C:\temp", r"%C:\\temp%"),
+        ("프리미엄", "%프리미엄%"),
+    ],
+)
+def test_name_keyword_wildcards_are_escaped(keyword: str, expected: str) -> None:
+    result = make_builder().build(Intent(kind="lookup", target_type="기본상품", name_keyword=keyword))
+    assert r"M.OBJ_NAME LIKE :name_keyword ESCAPE '\'" in flat(result.sql)
+    assert result.params["name_keyword"] == expected

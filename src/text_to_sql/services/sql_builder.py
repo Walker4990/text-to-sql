@@ -11,12 +11,22 @@ from text_to_sql.domain.intent import Intent
 from text_to_sql.errors import UnsupportedQuestionError
 from text_to_sql.repositories.metadata_repository import Metadata, SiteProfile
 
+# 템플릿이 있는 질문 종류 (T1 lookup, T2 list, T3·T4 structure)
+_IMPLEMENTED_KINDS = frozenset({"lookup", "list", "structure"})
+
 
 # [스프링] 응답 VO. build()가 돌려주는 결과 묶음
 @dataclass
 class BuiltSql:
     sql: str
     params: dict[str, object]
+
+
+def _escape_like(keyword: str) -> str:
+    """LIKE 검색어의 \\ % _ 앞에 \\ 를 붙인다.
+
+    \\ 를 먼저 바꿔야 새로 붙인 \\ 가 두 번 바뀌지 않는다."""
+    return keyword.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
 class SqlBuilder:
@@ -27,6 +37,10 @@ class SqlBuilder:
     def build(self, intent: Intent) -> BuiltSql:
         if intent.kind == "unsupported":
             raise UnsupportedQuestionError("지원하지 않는 질문입니다.")
+        # attribute·pattern·pattern_catalog(T5~T7)는 아직 템플릿이 없다.
+        # Intent 모델은 허용하므로 여기서 막지 않으면 lookup처럼 처리되어 잘못된 SQL이 나온다
+        if intent.kind not in _IMPLEMENTED_KINDS:
+            raise UnsupportedQuestionError(f"아직 지원하지 않는 질문 종류입니다: {intent.kind}")
         if intent.kind == "structure":
             return self.build_structure(intent)
         if intent.target_type is None:
@@ -42,8 +56,9 @@ class SqlBuilder:
             conditions.append(f"{m}.BIZCODE = :code")
             params["code"] = intent.code
         elif intent.name_keyword:
-            conditions.append(f"{m}.OBJ_NAME LIKE :name_keyword")
-            params["name_keyword"] = f"%{intent.name_keyword}%"
+            # 검색어 안의 % _ 는 글자 그대로 찾도록 \ 로 이스케이프 (PostgreSQL·Oracle 공통 ESCAPE)
+            conditions.append(f"{m}.OBJ_NAME LIKE :name_keyword ESCAPE '\\'")
+            params["name_keyword"] = f"%{_escape_like(intent.name_keyword)}%"
 
         if intent.base_date:
             conditions.append(f":base_dt BETWEEN {m}.VF_DT AND {m}.VT_DT")
