@@ -21,7 +21,7 @@ def test_defaults_when_only_api_key_is_set() -> None:
         openai_model="gpt-4o-mini",
         openai_base_url="https://api.openai.com/v1",
         llm_timeout=30.0,
-        site="sample",
+        site="demo",
         metadata_dir=DEFAULT_METADATA_DIR,
     )
 
@@ -31,6 +31,7 @@ def test_default_metadata_dir_is_inside_package() -> None:
     assert DEFAULT_METADATA_DIR.is_absolute()
     assert (DEFAULT_METADATA_DIR / "common.json").is_file()
     assert (DEFAULT_METADATA_DIR / "sites" / "sample.json").is_file()
+    assert (DEFAULT_METADATA_DIR / "sites" / "demo.json").is_file()
 
 
 def test_values_are_read_from_env() -> None:

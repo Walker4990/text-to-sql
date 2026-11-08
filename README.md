@@ -34,12 +34,12 @@ from text_to_sql.config import load_settings
 from text_to_sql.factory import create_service
 
 service = create_service(load_settings())          # 환경변수에서 설정을 읽는다
-result = service.generate("BP001 기본상품 알려줘", request_id="req-1")
+result = service.generate("RD001 라이더 알려줘", request_id="req-1")
 
 result.status         # "ok" 또는 "unsupported"
 result.sql            # ... WHERE M.TYPEID = :type_id AND M.BIZCODE = :code ...
-result.rendered_sql   # ... WHERE M.TYPEID = 901 AND M.BIZCODE = 'BP001' ...
-result.params         # {"type_id": 901, "code": "BP001"}
+result.rendered_sql   # ... WHERE M.TYPEID = 1120 AND M.BIZCODE = 'RD001' ...
+result.params         # {"type_id": 1120, "code": "RD001"}  (demo 프로필: 라이더 → 특약)
 result.message        # unsupported일 때 사유
 ```
 
@@ -49,8 +49,20 @@ result.message        # unsupported일 때 사유
 | `TTS_OPENAI_MODEL` | `gpt-4o-mini` | 의도 추출 모델 |
 | `TTS_OPENAI_BASE_URL` | `https://api.openai.com/v1` | |
 | `TTS_LLM_TIMEOUT` | `30` | 초 |
-| `TTS_SITE` | `sample` | 사이트 프로필 이름 (`metadata/sites/<이름>.json`) |
+| `TTS_SITE` | `demo` | 사이트 프로필 이름 (`metadata/sites/<이름>.json`). `demo`=보험·카드·증권 시연용, `sample`=테스트용 |
 | `TTS_METADATA_DIR` | 패키지 안 `metadata/` | |
+
+### 시연 프로필 (`demo`)
+
+보험·카드·증권 현장 시연용 가상 프로필이다. TYPEID는 실제 현장 값과 무관하다.
+
+| 업권 | 유형 (TYPEID) | 별칭 |
+|---|---|---|
+| 보험 (1xxx) | 보험상품(1100), 주계약(1110), 특약(1120), 보장(1130), 보험료율(1140) | 보험, 주보험, 라이더·선택특약, 담보, 요율 |
+| 카드 (2xxx) | 카드상품(2100), 카드혜택(2110), 연회비(2120), 제휴가맹점(2130) | 카드, 부가서비스·혜택, 가맹점·제휴사 |
+| 증권 (3xxx) | 펀드(3100), ETF(3110), 계좌상품(3120), 거래수수료(3130) | 상장지수펀드, 계좌, 수수료·매매수수료 |
+
+시연 질문 예: `INS001 보험상품 알려줘`, `라이더 목록 보여줘`, `CRD001 카드에 연결된 부가서비스`, `글로벌 들어간 펀드 찾아줘`, `FEE01 수수료가 붙은 상위 상품`
 
 오류: LLM 서버 연결·HTTP 오류는 `LlmUnavailableError`, 생성된 SQL이 검증에 걸리면 `SqlValidationError`, 설정 누락은 `ConfigError`. 지원하지 않는 질문은 예외가 아니라 `status="unsupported"`로 돌아온다.
 

@@ -49,7 +49,7 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
     | TTS_OPENAI_MODEL | gpt-4o-mini |
     | TTS_OPENAI_BASE_URL | https://api.openai.com/v1 |
     | TTS_LLM_TIMEOUT | 30 (초) |
-    | TTS_SITE | sample |
+    | TTS_SITE | demo |
     | TTS_METADATA_DIR | 패키지 안 metadata 폴더 |
     """
     source = os.environ if env is None else env
@@ -66,7 +66,7 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
     if timeout <= 0:
         raise ConfigError(f"TTS_LLM_TIMEOUT은 0보다 커야 합니다: {timeout_text}")
 
-    site = source.get("TTS_SITE", "sample")
+    site = source.get("TTS_SITE", "demo")
     if not _SITE_NAME.fullmatch(site):
         raise ConfigError(f"TTS_SITE는 영문·숫자·_- 만 쓸 수 있습니다: {site!r}")
 

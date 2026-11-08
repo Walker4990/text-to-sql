@@ -155,6 +155,26 @@ def test_prompt_mentions_json() -> None:
     assert "JSON" in build_system_prompt(sample_profile())
 
 
+# 문제 8-1 (IE-04): 예시는 프로필의 유형으로 만든다
+# 고정 예시가 프로필에 없는 유형(예: 기본상품)을 쓰면 모델이 그 유형을 따라 답해
+# 시연 질문이 거절될 수 있다
+def test_prompt_examples_use_profile_types() -> None:
+    profile = SiteProfile(
+        site="t", types={"보험상품": 1, "특약": 2}, aliases={"보험상품": "보험상품", "특약": "특약"}
+    )
+    prompt = build_system_prompt(profile)
+    assert "기본상품" not in prompt
+    assert '{"kind": "lookup", "target_type": "보험상품", "code": "A001"}' in prompt
+    assert '{"kind": "list", "target_type": "특약"}' in prompt
+
+
+# 문제 8-2 (IE-04): 유형이 하나뿐이어도 예시를 만든다
+def test_prompt_examples_with_single_type() -> None:
+    profile = SiteProfile(site="t", types={"펀드": 1}, aliases={"펀드": "펀드"})
+    prompt = build_system_prompt(profile)
+    assert '{"kind": "list", "target_type": "펀드"}' in prompt
+
+
 # ───────────── OpenAI 요청 (IE-03, 05) ─────────────
 
 

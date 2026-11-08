@@ -30,15 +30,15 @@ def test_end_to_end_with_mock_openai() -> None:
     """가짜 OpenAI 응답으로 질문 → SQL까지 한 번에 확인한다."""
 
     def handler(request: httpx.Request) -> httpx.Response:
-        content = '{"kind": "lookup", "target_type": "기본상품", "code": "BP001"}'
+        content = '{"kind": "lookup", "target_type": "라이더", "code": "RD001"}'
         return httpx.Response(200, json={"choices": [{"message": {"content": content}}]})
 
     client = httpx.Client(base_url="http://openai.test/v1", transport=httpx.MockTransport(handler))
     service = create_service(settings(), client=client)
 
-    result = service.generate("BP001 기본상품 알려줘", "req-1")
+    result = service.generate("RD001 라이더 알려줘", "req-1")
 
     assert result.status == "ok"
-    assert result.params == {"type_id": 901, "code": "BP001"}
+    assert result.params == {"type_id": 1120, "code": "RD001"}  # 기본 프로필 demo: 라이더 → 특약
     assert result.rendered_sql is not None
-    assert "M.BIZCODE = 'BP001'" in result.rendered_sql
+    assert "M.BIZCODE = 'RD001'" in result.rendered_sql
