@@ -34,6 +34,15 @@ class SqlBuilder:
         self.common = common
         self.profile = profile
 
+    def _code_condition(self, alias: str, intent: Intent, params: dict[str, object]) -> str:
+        if intent.code_item:
+            name = self.profile.find_registered_item(intent.code_item)
+            if intent.code_item_multi:
+                return f"{alias}.BIZCODE IN (<$@distinct([{name}].array)@$>)"
+            return f"{alias}.BIZCODE = <$@[{name}]@$>"
+        params["code"] = intent.code
+        return f"{alias}.BIZCODE = :code"
+
     def build(self, intent: Intent) -> BuiltSql:
         if intent.kind == "unsupported":
             raise UnsupportedQuestionError("지원하지 않는 질문입니다.")
@@ -54,9 +63,8 @@ class SqlBuilder:
         conditions: list[str] = [f"{m}.TYPEID = :type_id"]
         params: dict[str, object] = {"type_id": type_id}
 
-        if intent.code and intent.kind == "lookup":
-            conditions.append(f"{m}.BIZCODE = :code")
-            params["code"] = intent.code
+        if (intent.code or intent.code_item) and intent.kind == "lookup":
+            conditions.append(self._code_condition(m, intent, params))
         elif intent.name_keyword:
             # 검색어 안의 % _ 는 글자 그대로 찾도록 \ 로 이스케이프 (PostgreSQL·Oracle 공통 ESCAPE)
             conditions.append(f"{m}.OBJ_NAME LIKE :name_keyword ESCAPE '\\'")
@@ -90,12 +98,12 @@ class SqlBuilder:
             base, result = c, p
         else:
             raise UnsupportedQuestionError("방향이 없습니다.")
+        params: dict[str, object] = {"type_id": type_id, "inv_type": 1}
         conditions = [
             f"{base}.TYPEID = :type_id",
-            f"{base}.BIZCODE = :code",
+            self._code_condition(base, intent, params),
             f"{i}.INV_TYPE = :inv_type",
         ]
-        params: dict[str, object] = {"type_id": type_id, "code": intent.code, "inv_type": 1}
 
         conditions.append(f"{p}.{table1.version_column} = '{table1.version_value}'")
         conditions.append(f"{i}.{table2.version_column} = '{table2.version_value}'")
@@ -130,9 +138,8 @@ class SqlBuilder:
         columns += [f'{d}.{item.column} "{name}"' for name, item in items]
         conditions = [f"{m}.TYPEID = :type_id"]
         params: dict[str, object] = {"type_id": type_id}
-        if intent.code:
-            conditions.append(f"{m}.BIZCODE = :code")
-            params["code"] = intent.code
+        if intent.code or intent.code_item:
+            conditions.append(self._code_condition(m, intent, params))
         elif intent.name_keyword:
             conditions.append(f"{m}.OBJ_NAME LIKE :name_keyword ESCAPE '\\'")
             params["name_keyword"] = f"%{_escape_like(intent.name_keyword)}%"

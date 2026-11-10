@@ -20,6 +20,8 @@ _SCHEMA = """
 - direction: structure 전용. "children"(하위) | "parents"(상위)
 - base_date: 기준일자 YYYYMMDD (질문에 날짜가 있을 때만)
 - attributes: attribute 전용. 조회할 항목 이름 목록 ([항목]에 있는 이름만)
+- code_item: 질문에 항목명칭(예: 상품코드)을 말했을 때만. [등록 항목]의 이름 그대로
+- code_item_multi: code_item을 여러 값(목록·배열)으로 받을 때 true
 - reason: unsupported일 때 사유
 
 [필수값]
@@ -27,6 +29,7 @@ _SCHEMA = """
 - list: target_type
 - structure: target_type + code + direction
 - attribute: target_type + (code 또는 name_keyword) + attributes
+- code_item은 code 대신 쓸 수 있다 (lookup·structure·attribute)
 """
 
 _RULES = """
@@ -68,6 +71,9 @@ def build_system_prompt(profile: SiteProfile) -> str:
         lines.append("[항목]")
         for type_name, type_items in profile.items.items():
             lines.append(f"{type_name}: {', '.join(type_items)}")
+    if profile.registered_items:
+        lines.append("[등록 항목]")
+        lines.append(", ".join(profile.registered_items))
     lines.append(_SCHEMA)
     lines.append(_build_examples(profile))
     lines.append(_RULES)
@@ -91,6 +97,13 @@ def _build_examples(profile: SiteProfile) -> str:
                 f'"attributes": ["{item}"]}}',
             ]
             break
+    code_item_example: list[str] = []
+    if profile.registered_items:
+        item_name = profile.registered_items[0]
+        code_item_example = [
+            f"질문: {item_name} 항목으로 {first} 알려줘",
+            f'출력: {{"kind": "lookup", "target_type": "{first}", "code_item": "{item_name}"}}',
+        ]
     return "\n".join(
         [
             "[예시]",
@@ -102,6 +115,7 @@ def _build_examples(profile: SiteProfile) -> str:
             f'출력: {{"kind": "structure", "target_type": "{first}", "code": "A001", '
             '"direction": "children"}',
             *attribute_example,
+            *code_item_example,
             "질문: 오늘 날씨 어때",
             '출력: {"kind": "unsupported", "reason": "상품 DB 질문이 아님"}',
         ]
@@ -141,6 +155,11 @@ class OpenAiIntentExtractor:
             raise IntentParseError("LLM 응답에 내용이 없습니다.")
 
         try:
-            return Intent.model_validate_json(content)
+            intent = Intent.model_validate_json(content)
         except ValidationError as err:
             raise IntentParseError("의도 JSON이 스키마에 맞지 않습니다.") from err
+
+        # LLM이 지어낸 항목명칭을 막는다. 띄어 쓴 질문("상품 코드")도 같은 이름으로 본다
+        if intent.code_item and intent.code_item not in cleaned.replace(" ", ""):
+            raise IntentParseError(f"질문에 없는 항목명칭입니다: {intent.code_item}")
+        return intent

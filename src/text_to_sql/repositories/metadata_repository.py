@@ -29,6 +29,7 @@ class SiteProfile:
     aliases: dict[str, str]
     table_aliases: dict[str, str] = field(default_factory=lambda: dict(DEFAULT_TABLE_ALIASES))
     items: dict[str, dict[str, ItemDef]] = field(default_factory=dict)
+    registered_items: list[str] = field(default_factory=list)
 
     # [스프링] public int findTypeid(String typeName) 인스턴스 메서드 (self = this)
     # 이름이나 별칭으로 TYPEID를 찾는다. 없으면 UnsupportedQuestionError
@@ -58,6 +59,11 @@ class SiteProfile:
         if item.multi:
             raise UnsupportedQuestionError(f"다중값 항목은 아직 지원하지 않습니다: {item_name}")
         return item
+
+    def find_registered_item(self, name: str) -> str:
+        if name not in self.registered_items:
+            raise UnsupportedQuestionError(f"등록되지 않은 항목입니다: {name}")
+        return name
 
 
 @dataclass
@@ -124,6 +130,13 @@ def load_site_profile(path: str) -> SiteProfile:
                     raise MetadataError(f"multi must be true/false in file: {path}")
                 items[type_name][item_name] = ItemDef(column=column, multi=multi)
 
+        registered_items = data.get("registered_items", [])
+        if not isinstance(registered_items, list):
+            raise MetadataError(f"registered_items must be a list in file: {path}")
+        for name in registered_items:
+            if not isinstance(name, str) or not _ITEM_NAME.fullmatch(name):
+                raise MetadataError(f"Invalid registered item '{name}' in file: {path}")
+
         # [스프링] new SiteProfile(site, types, aliases). data["키"]에 키가 없으면 KeyError
         return SiteProfile(
             site=data["site"],
@@ -131,6 +144,7 @@ def load_site_profile(path: str) -> SiteProfile:
             aliases=data["aliases"],
             table_aliases=table_aliases,
             items=items,
+            registered_items=registered_items,
         )
     # [스프링] catch (FileNotFoundException e) { throw new MetadataException(msg, e); }
     # "from err"는 원래 예외를 cause로 연결한다 (new X(msg, cause))

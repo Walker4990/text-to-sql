@@ -21,6 +21,8 @@ class Intent(BaseModel):
     base_date: str | None = None
     reason: str | None = None
     attributes: list[str] | None = Field(default=None, max_length=10)
+    code_item: str | None = Field(default=None, pattern=r"^[가-힣A-Za-z0-9_]{1,30}$")
+    code_item_multi: bool = False
 
     @field_validator("base_date")
     @classmethod
@@ -34,16 +36,20 @@ class Intent(BaseModel):
 
     @model_validator(mode="after")
     def check_required_fileds(self) -> Self:
-        if self.kind == "lookup" and not (self.code or self.name_keyword):
-            raise ValueError("lookup에는 code 또는 name_keyword가 필요합니다")
+        if self.kind == "lookup" and not (self.code or self.name_keyword or self.code_item):
+            raise ValueError("lookup에는 code, name_keyword, code_item 중 하나가 필요합니다")
         if self.kind == "list" and not self.target_type:
             raise ValueError("list에는 target_type이 필요합니다.")
         if self.kind == "structure" and (
-            not self.target_type or not self.code or not self.direction
+            not self.target_type or not (self.code or self.code_item) or not self.direction
         ):
-            raise ValueError("structure에는 target_type, code, direction이 모두 필요합니다.")
+            raise ValueError(
+                "structure에는 target_type, code 또는 code_item, direction이 필요합니다."
+            )
         if self.kind == "attribute" and (
-            not self.target_type or not (self.code or self.name_keyword) or not self.attributes
+            not self.target_type
+            or not (self.code or self.name_keyword or self.code_item)
+            or not self.attributes
         ):
             raise ValueError(
                 "attribute에는 target_type, code 또는 name_keyword, attributes가 필요합니다."
