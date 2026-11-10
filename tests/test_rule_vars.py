@@ -152,11 +152,12 @@ def test_load_accepts_various_names(tmp_path: Path) -> None:
 # ───────────── 3단계: Intent (code_item, code_item_multi) ─────────────
 
 
-# 문제 9: 기본값은 code_item=None, code_item_multi=False (기존 의도는 그대로 만들어진다)
+# 문제 9: 기본값은 code_item=None, code_item_multi=True
+#        DB 룰에서 BIZCODE는 보통 여러 값으로 받으므로 기본이 IN 조건이다 (2026-11-10 변경)
 def test_intent_code_item_defaults() -> None:
     intent = Intent(kind="lookup", target_type="기본상품", code="BP001")
     assert intent.code_item is None
-    assert intent.code_item_multi is False
+    assert intent.code_item_multi is True
 
 
 # 문제 10: code_item은 code 대신 쓸 수 있다 (단건·구조·속성)
@@ -196,9 +197,12 @@ def test_lookup_needs_some_condition() -> None:
 # ───────────── 4단계: 빌더 (_code_condition을 단건·구조·속성에 적용) ─────────────
 
 
-# 문제 14 (단건, = 조건): BIZCODE = <$@[상품코드]@$>. params에 code가 없다
+# 문제 14 (단건, = 조건): 값이 하나라고 했을 때(code_item_multi=False)만 = <$@[상품코드]@$>
+#         params에 code가 없다
 def test_lookup_single_rule_var() -> None:
-    intent = Intent(kind="lookup", target_type="기본상품", code_item="상품코드")
+    intent = Intent(
+        kind="lookup", target_type="기본상품", code_item="상품코드", code_item_multi=False
+    )
     result = make_builder().build(intent)
     assert flat(result.sql) == (
         "SELECT M.SID, M.BIZCODE, M.OBJ_NAME FROM OBJ_MAIN M "
@@ -208,11 +212,9 @@ def test_lookup_single_rule_var() -> None:
     assert result.params == {"type_id": 901}
 
 
-# 문제 15 (단건, IN 조건): code_item_multi=True면 IN (<$@distinct([상품코드].array)@$>)
+# 문제 15 (단건, IN 조건): 기본(code_item_multi 생략)은 IN (<$@distinct([상품코드].array)@$>)
 def test_lookup_multi_rule_var() -> None:
-    intent = Intent(
-        kind="lookup", target_type="기본상품", code_item="상품코드", code_item_multi=True
-    )
+    intent = Intent(kind="lookup", target_type="기본상품", code_item="상품코드")
     sql = flat(make_builder().build(intent).sql)
     assert "M.BIZCODE IN (<$@distinct([상품코드].array)@$>)" in sql
 
@@ -223,21 +225,22 @@ def test_structure_rule_var_position() -> None:
     children = builder.build(
         Intent(kind="structure", target_type="기본상품", code_item="상품코드", direction="children")
     )
-    assert "P.TYPEID = :type_id AND P.BIZCODE = <$@[상품코드]@$> AND I.INV_TYPE" in flat(
-        children.sql
+    assert (
+        "P.TYPEID = :type_id AND P.BIZCODE IN (<$@distinct([상품코드].array)@$>) AND P.END_DT"
+        in flat(children.sql)
     )
-    assert children.params == {"type_id": 901, "inv_type": 1}
+    assert children.params == {"type_id": 901}
 
     parents = builder.build(
         Intent(
             kind="structure",
             target_type="부가옵션",
             code_item="옵션코드",
-            code_item_multi=True,
+            code_item_multi=False,
             direction="parents",
         )
     )
-    assert "C.BIZCODE IN (<$@distinct([옵션코드].array)@$>)" in flat(parents.sql)
+    assert "C.BIZCODE = <$@[옵션코드]@$>" in flat(parents.sql)
 
 
 # 문제 17 (속성): 속성 조회의 코드 조건도 룰 변수를 쓴다
@@ -249,7 +252,7 @@ def test_attribute_rule_var() -> None:
     assert flat(result.sql) == (
         'SELECT M.BIZCODE, M.OBJ_NAME, D.CHAR01 "약정기간" '
         "FROM OBJ_MAIN M JOIN OBJ_DETAIL D ON D.SID = M.SID "
-        "WHERE M.TYPEID = :type_id AND M.BIZCODE = <$@[상품코드]@$> "
+        "WHERE M.TYPEID = :type_id AND M.BIZCODE IN (<$@distinct([상품코드].array)@$>) "
         "AND D.KIND = :detail_kind AND M.END_DT = '99991231' AND D.END_DT = '99991231' "
         "ORDER BY M.BIZCODE"
     )
@@ -275,7 +278,7 @@ def test_without_code_item_keeps_bind_value() -> None:
 def test_code_item_wins_over_code() -> None:
     intent = Intent(kind="lookup", target_type="기본상품", code="BP001", code_item="상품코드")
     result = make_builder().build(intent)
-    assert "M.BIZCODE = <$@[상품코드]@$>" in flat(result.sql)
+    assert "M.BIZCODE IN (<$@distinct([상품코드].array)@$>)" in flat(result.sql)
     assert ":code" not in result.sql
     assert "code" not in result.params
 
@@ -312,7 +315,7 @@ def test_prompt_describes_code_item() -> None:
     prompt = build_system_prompt(item_profile())
     assert "- code_item: " in prompt
     assert "- code_item_multi: " in prompt
-    assert "- code_item은 code 대신 쓸 수 있다 (lookup·structure·attribute)" in prompt
+    assert "- code_item은 code 대신 쓸 수 있다 (lookup·structure·attribute·hierarchy)" in prompt
 
 
 # 문제 24: 예시는 첫 유형과 첫 등록 항목으로 만든다 (프로필에 없는 이름을 보여 주지 않는다)
@@ -349,7 +352,8 @@ def demo_service(intent: Intent) -> TextToSqlService:
     )
 
 
-# 문제 27: "FEE01 수수료가 붙은 상위 상품, 수수료코드 항목으로" → C.BIZCODE = <$@[수수료코드]@$>
+# 문제 27: "FEE01 수수료가 붙은 상위 상품, 수수료코드 항목으로"
+#         → C.BIZCODE IN (<$@distinct([수수료코드].array)@$>)
 def test_demo_structure_with_code_item() -> None:
     intent = Intent(
         kind="structure",
@@ -361,7 +365,7 @@ def test_demo_structure_with_code_item() -> None:
     result = demo_service(intent).generate("q", "req-rule")
     assert result.status == "ok"
     assert result.rendered_sql is not None
-    assert "C.BIZCODE = <$@[수수료코드]@$>" in flat(result.rendered_sql)
+    assert "C.BIZCODE IN (<$@distinct([수수료코드].array)@$>)" in flat(result.rendered_sql)
     assert "FEE01" not in result.rendered_sql
 
 
@@ -371,3 +375,25 @@ def test_demo_unregistered_code_item_is_unsupported() -> None:
     result = demo_service(intent).generate("q", "req-rule")
     assert result.status == "unsupported"
     assert result.message is not None and "등록되지 않은 항목" in result.message
+
+
+# ───────────── 2026-11-10 보강: 프롬프트 규칙과 실패 로그 ─────────────
+
+
+# 문제 29: 항목명칭을 code에 넣지 말라는 규칙과, 단일 값(false)·속성 조합 예시가 있다
+def test_prompt_guides_code_item_usage() -> None:
+    prompt = build_system_prompt(item_profile())
+    assert "항목명칭(예: 상품코드)은 code가 아니라 code_item에 넣는다" in prompt
+    assert '"code_item": "상품코드", "code_item_multi": false}' in prompt
+    assert "질문: 상품코드 여러 개로 기본상품의 약정기간 알려줘" in prompt
+
+
+# 문제 30: LLM이 항목명칭을 code에 넣는 등 스키마를 어기면, 원문 JSON을 로그에 남기고 거절한다
+def test_schema_violation_logs_llm_content(caplog: pytest.LogCaptureFixture) -> None:
+    content = (
+        '{"kind": "attribute", "target_type": "기본상품", "code": "계좌상품코드", '
+        '"attributes": ["약정기간"]}'
+    )
+    with pytest.raises(IntentParseError):
+        fake_openai(content, item_profile()).extract("계좌상품코드 여러 개로 약정기간")
+    assert "계좌상품코드" in caplog.text

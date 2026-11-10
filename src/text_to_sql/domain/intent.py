@@ -12,7 +12,14 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 
 class Intent(BaseModel):
     kind: Literal[
-        "lookup", "list", "structure", "attribute", "pattern", "pattern_catalog", "unsupported"
+        "lookup",
+        "list",
+        "structure",
+        "attribute",
+        "hierarchy",
+        "pattern",
+        "pattern_catalog",
+        "unsupported",
     ]
     target_type: str | None = None
     code: str | None = Field(default=None, pattern=r"^[A-Za-z0-9_.-]{1,32}$")
@@ -22,7 +29,12 @@ class Intent(BaseModel):
     reason: str | None = None
     attributes: list[str] | None = Field(default=None, max_length=10)
     code_item: str | None = Field(default=None, pattern=r"^[가-힣A-Za-z0-9_]{1,30}$")
-    code_item_multi: bool = False
+    # DB 룰에서 BIZCODE는 보통 여러 값으로 받으므로 기본은 IN 조건. 값이 하나라고 할 때만 False
+    code_item_multi: bool = True
+    # hierarchy 전용: target_type 아래로 내려가는 유형 경로 (예: 주계약 → 특약 → 보장), 최대 4단계
+    path: list[str] | None = Field(default=None, min_length=1, max_length=4)
+    # hierarchy 전용: 단계(유형)별로 꺼낼 항목. 없으면 경로의 각 유형 항목을 전부 꺼낸다
+    path_attributes: dict[str, list[str]] | None = None
 
     @field_validator("base_date")
     @classmethod
@@ -54,7 +66,26 @@ class Intent(BaseModel):
             raise ValueError(
                 "attribute에는 target_type, code 또는 name_keyword, attributes가 필요합니다."
             )
+        if self.kind == "hierarchy" and (
+            not self.target_type or not (self.code or self.code_item) or not self.path
+        ):
+            raise ValueError("hierarchy에는 target_type, code 또는 code_item, path가 필요합니다.")
         return self
+
+    @field_validator("path_attributes")
+    @classmethod
+    def check_path_attributes(
+        cls, value: dict[str, list[str]] | None
+    ) -> dict[str, list[str]] | None:
+        if value is None:
+            return value
+        for type_name, names in value.items():
+            for name in [type_name, *names]:
+                if not re.fullmatch(r"[가-힣A-Za-z0-9_]{1,30}", name):
+                    raise ValueError(f"이름 형식이 잘못되었습니다: {name!r}")
+            if len(names) > 10:
+                raise ValueError(f"한 단계의 항목은 10개까지입니다: {type_name}")
+        return value
 
     @field_validator("attributes")
     @classmethod

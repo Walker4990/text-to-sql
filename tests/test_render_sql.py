@@ -81,7 +81,7 @@ def test_unsupported_value_type_raises(value: object) -> None:
         ),
         (
             Intent(kind="structure", target_type="기본상품", code="BP001", direction="children"),
-            ["P.TYPEID = 901", "P.BIZCODE = 'BP001'", "I.INV_TYPE = 1"],
+            ["P.TYPEID = 901", "P.BIZCODE = 'BP001'", "I.END_DT = '99991231'"],
         ),
     ],
 )

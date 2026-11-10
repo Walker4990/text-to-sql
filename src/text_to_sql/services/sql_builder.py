@@ -9,10 +9,10 @@ from dataclasses import dataclass
 
 from text_to_sql.domain.intent import Intent
 from text_to_sql.errors import UnsupportedQuestionError
-from text_to_sql.repositories.metadata_repository import Metadata, SiteProfile
+from text_to_sql.repositories.metadata_repository import ItemDef, Metadata, SiteProfile
 
-# 템플릿이 있는 질문 종류 (T1 lookup, T2 list, T3·T4 structure, T5 attribute)
-_IMPLEMENTED_KINDS = frozenset({"lookup", "list", "structure", "attribute"})
+# 템플릿이 있는 질문 종류 (T1 lookup, T2 list, T3·T4 structure, T5 attribute, 계층 hierarchy)
+_IMPLEMENTED_KINDS = frozenset({"lookup", "list", "structure", "attribute", "hierarchy"})
 
 
 # [스프링] 응답 VO. build()가 돌려주는 결과 묶음
@@ -54,6 +54,8 @@ class SqlBuilder:
             return self.build_structure(intent)
         if intent.kind == "attribute":
             return self.build_attribute(intent)
+        if intent.kind == "hierarchy":
+            return self.build_hierarchy(intent)
         if intent.target_type is None:
             raise UnsupportedQuestionError("유형이 없습니다.")
 
@@ -98,11 +100,11 @@ class SqlBuilder:
             base, result = c, p
         else:
             raise UnsupportedQuestionError("방향이 없습니다.")
-        params: dict[str, object] = {"type_id": type_id, "inv_type": 1}
+        # 관계 종류(INV_TYPE)는 거르지 않는다 (현장 DB 룰 관행, 2026-11-10)
+        params: dict[str, object] = {"type_id": type_id}
         conditions = [
             f"{base}.TYPEID = :type_id",
             self._code_condition(base, intent, params),
-            f"{i}.INV_TYPE = :inv_type",
         ]
 
         conditions.append(f"{p}.{table1.version_column} = '{table1.version_value}'")
@@ -157,6 +159,95 @@ class SqlBuilder:
         )
         return BuiltSql(sql=query, params=params)
 
+    def build_hierarchy(self, intent: Intent) -> BuiltSql:
+        """여러 단계 계층 + 단계별 속성 (예: 보험상품 → 주계약 → 특약 → 보장).
+
+        L0은 질문에서 지목한 기준 오브젝트, L1부터 path 순서대로 OBJ_INV를 따라 내려간다.
+        각 단계는 유형(TYPEID)으로 거르고, 속성이 있는 단계만 OBJ_DETAIL을 LEFT JOIN 한다.
+        """
+        if intent.target_type is None or not intent.path:
+            raise UnsupportedQuestionError("유형 경로가 없습니다.")
+        main = self.common.find_table("OBJ_MAIN")
+        inv = self.common.find_table("OBJ_INV")
+        detail = self.common.find_table("OBJ_DETAIL")
+
+        level_types = [self.profile.find_alias(name) for name in [intent.target_type, *intent.path]]
+        if len(set(level_types)) != len(level_types):
+            raise UnsupportedQuestionError("경로에 같은 유형이 두 번 나옵니다.")
+        wanted: dict[str, list[str]] | None = None
+        if intent.path_attributes is not None:
+            wanted = {
+                self.profile.find_alias(name): items
+                for name, items in intent.path_attributes.items()
+            }
+            outside = set(wanted) - set(level_types)
+            if outside:
+                raise UnsupportedQuestionError(f"경로에 없는 유형의 항목입니다: {sorted(outside)}")
+
+        params: dict[str, object] = {}
+        columns: list[str] = []
+        joins: list[str] = []
+        conditions: list[str] = []
+        used_labels: set[str] = set()
+        for n, type_name in enumerate(level_types):
+            # 유형 이름은 SQL 별칭(" ")에 들어가므로 형식을 한 번 더 확인한다
+            if not _LABEL.fullmatch(type_name):
+                raise UnsupportedQuestionError(f"유형 이름 형식이 잘못되었습니다: {type_name}")
+            level, key = f"L{n}", ("type_id" if n == 0 else f"type_id_{n}")
+            params[key] = self.profile.find_typeid(type_name)
+            columns += [f'{level}.BIZCODE "{type_name}"', f'{level}.OBJ_NAME "{type_name}명"']
+            if n == 0:
+                conditions.append(f"{level}.TYPEID = :{key}")
+                conditions.append(self._code_condition(level, intent, params))
+            else:
+                link = f"I{n}"
+                joins.append(f"JOIN OBJ_INV {link} ON {link}.SID = L{n - 1}.SID")
+                joins.append(
+                    f"JOIN OBJ_MAIN {level} ON {level}.SID = {link}.SUBSID "
+                    f"AND {level}.TYPEID = :{key}"
+                )
+                conditions.append(f"{link}.{inv.version_column} = '{inv.version_value}'")
+            conditions.append(f"{level}.{main.version_column} = '{main.version_value}'")
+
+            items = self._level_items(type_name, n, wanted)
+            if items:
+                d = f"D{n}"
+                params["detail_kind"] = 1
+                joins.append(
+                    f"LEFT JOIN OBJ_DETAIL {d} ON {d}.SID = {level}.SID "
+                    f"AND {d}.KIND = :detail_kind "
+                    f"AND {d}.{detail.version_column} = '{detail.version_value}'"
+                )
+                for name, item in items:
+                    # 다른 단계에 같은 항목 이름이 있으면 "유형_항목"으로 구분한다
+                    label = name if name not in used_labels else f"{type_name}_{name}"
+                    used_labels.add(label)
+                    columns.append(f'{d}.{item.column} "{label}"')
+
+        order = ", ".join(f"L{n}.BIZCODE" for n in range(len(level_types)))
+        query = (
+            f"SELECT {', '.join(columns)} "
+            f"FROM OBJ_MAIN L0 {' '.join(joins)} "
+            f"WHERE {' AND '.join(conditions)} "
+            f"ORDER BY {order}"
+        )
+        return BuiltSql(sql=query, params=params)
+
+    def _level_items(
+        self, type_name: str, level: int, wanted: dict[str, list[str]] | None
+    ) -> list[tuple[str, ItemDef]]:
+        """단계별로 꺼낼 항목. 항목을 지정하지 않았으면 경로 유형(1단계부터)의 단일값 항목 전부."""
+        if wanted is None:
+            if level == 0:
+                return []
+            type_items = self.profile.items.get(type_name, {})
+            return [(name, item) for name, item in type_items.items() if not item.multi]
+        names = list(dict.fromkeys(wanted.get(type_name, [])))
+        return [(name, self.profile.find_item(type_name, name)) for name in names]
+
+
+# 계층 조회에서 SQL 별칭으로 쓰는 유형 이름 형식
+_LABEL = re.compile(r"[가-힣A-Za-z0-9_]{1,30}")
 
 _BIND_PARAM = re.compile(r"(?<!:):(\w+)")
 

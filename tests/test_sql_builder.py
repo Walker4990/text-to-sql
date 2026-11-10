@@ -257,11 +257,11 @@ def test_structure_has_latest_version_condition_on_all_tables() -> None:
         assert "C.END_DT = '99991231'" in sql
 
 
-# 문제 22: 관계 종류는 기본 관계(INV_TYPE = 1)로 고정한다. 값은 바인드 변수로 전달한다
-def test_structure_uses_basic_relation() -> None:
+# 문제 22: 관계 종류(INV_TYPE)는 거르지 않는다 (현장 DB 룰 관행, 2026-11-10 변경)
+def test_structure_does_not_filter_relation_type() -> None:
     result = make_builder().build(children_intent())
-    assert "I.INV_TYPE = :inv_type" in flat(result.sql)
-    assert result.params["inv_type"] == 1
+    assert "INV_TYPE" not in result.sql
+    assert "inv_type" not in result.params
 
 
 # 문제 23: 결과는 결과 쪽 오브젝트의 BIZCODE 순으로 정렬한다 (children은 C, parents는 P)
@@ -358,7 +358,6 @@ def test_structure_children_uses_custom_aliases() -> None:
     assert sql.startswith(f"{select} {join}")
     assert "OMA.TYPEID = :type_id" in sql
     assert "OMA.BIZCODE = :code" in sql
-    assert "OI.INV_TYPE = :inv_type" in sql
     assert "OMA.END_DT = '99991231'" in sql
     assert "OI.END_DT = '99991231'" in sql
     assert "OMB.END_DT = '99991231'" in sql
