@@ -22,12 +22,12 @@ BASE: Tabs = {
         ["특약", "1120", "", ""],
     ],
     "별칭": [["별칭", "유형명", "사용", "설명"], ["라이더", "특약", "Y", ""]],
-    "항목": [
+    "표준항목": [
         ["유형명", "항목명", "물리컬럼", "다중값", "사용", "설명"],
         ["보험상품", "보험기간", "char01", "N", "Y", ""],
         ["보험상품", "판매채널", "CHAR05", "Y", "Y", ""],
     ],
-    "등록항목": [["항목명칭", "사용", "설명"], ["상품코드", "Y", ""], ["특약코드", "", ""]],
+    "항목": [["항목명칭", "사용", "설명"], ["상품코드", "Y", ""], ["특약코드", "", ""]],
     "테이블별칭": [["역할", "별칭", "설명"], ["main", "OMA", ""]],
 }
 
@@ -68,7 +68,7 @@ def test_valid_sheet_builds_profile() -> None:
 
 # 문제 2: 선택 탭이 없으면 빈 값과 기본값으로 만든다
 def test_optional_tabs_absent() -> None:
-    result = rows_to_profile(tabs(별칭=None, 항목=None, 등록항목=None, 테이블별칭=None), "demo")
+    result = rows_to_profile(tabs(별칭=None, 표준항목=None, 항목=None, 테이블별칭=None), "demo")
     assert result.errors == []
     assert result.profile is not None
     assert result.profile.items == {}
@@ -104,7 +104,7 @@ def test_site_setting(rows: list[list[str]]) -> None:
 @pytest.mark.parametrize("typeid", ["1,100", "1100.0", "-1", "0", "", "abc"])
 def test_bad_typeid(typeid: str) -> None:
     rows = [["유형명", "TYPEID"], ["보험상품", typeid], ["특약", "1120"]]
-    result = rows_to_profile(tabs(유형=rows, 별칭=None, 항목=None), "demo")
+    result = rows_to_profile(tabs(유형=rows, 별칭=None, 표준항목=None), "demo")
     assert any(e.code == "MV-03" and e.row == 2 for e in result.errors)
 
 
@@ -115,10 +115,10 @@ def test_type_rules() -> None:
     dup_id = [["유형명", "TYPEID"], ["보험상품", "1100"], ["특약", "1100"]]
     none_used = [["유형명", "TYPEID", "사용"], ["보험상품", "1100", "N"]]
     for rows in (bad_name, dup_name, dup_id, none_used):
-        result = rows_to_profile(tabs(유형=rows, 별칭=None, 항목=None), "demo")
+        result = rows_to_profile(tabs(유형=rows, 별칭=None, 표준항목=None), "demo")
         assert result.profile is None
         assert "MV-03" in codes(result.errors), rows
-    dup = rows_to_profile(tabs(유형=dup_name, 별칭=None, 항목=None), "demo").errors
+    dup = rows_to_profile(tabs(유형=dup_name, 별칭=None, 표준항목=None), "demo").errors
     assert any(e.row == 3 and "2행" in e.message for e in dup)
 
 
@@ -146,7 +146,7 @@ def test_alias_self_and_disabled() -> None:
 def test_disabled_type_references_warn() -> None:
     types = [["유형명", "TYPEID", "사용"], ["보험상품", "1100", "Y"], ["특약", "1120", "N"]]
     items = [["유형명", "항목명", "물리컬럼"], ["특약", "보장기간", "CHAR01"]]
-    result = rows_to_profile(tabs(유형=types, 항목=items), "demo")
+    result = rows_to_profile(tabs(유형=types, 표준항목=items), "demo")
     assert result.errors == []
     assert result.profile is not None
     assert "특약" not in result.profile.types
@@ -176,7 +176,7 @@ def test_disabled_type_references_warn() -> None:
     ],
 )
 def test_item_rules(rows: list[list[str]]) -> None:
-    result = rows_to_profile(tabs(항목=rows), "demo")
+    result = rows_to_profile(tabs(표준항목=rows), "demo")
     assert result.profile is None
     assert "MV-05" in codes(result.errors)
 
@@ -188,17 +188,17 @@ def test_item_same_name_other_type() -> None:
         ["보험상품", "보장기간", "CHAR01"],
         ["특약", "보장기간", "CHAR01"],
     ]
-    result = rows_to_profile(tabs(항목=rows), "demo")
+    result = rows_to_profile(tabs(표준항목=rows), "demo")
     assert result.errors == []
 
 
-# 문제 12: 등록항목 형식·중복
+# 문제 12: 항목 탭(등록 항목명칭) 형식·중복
 @pytest.mark.parametrize(
     "rows",
     [[["항목명칭"], ["상품 코드"]], [["항목명칭"], ["상품코드"], ["상품코드"]]],
 )
 def test_registered_rules(rows: list[list[str]]) -> None:
-    assert "MV-06" in codes(rows_to_profile(tabs(등록항목=rows), "demo").errors)
+    assert "MV-06" in codes(rows_to_profile(tabs(항목=rows), "demo").errors)
 
 
 # 문제 13: 테이블별칭 역할·형식·중복 (기본값과 겹치는 것도 중복)
@@ -218,7 +218,7 @@ def test_table_alias_rules(rows: list[list[str]]) -> None:
 # 문제 14: 사용 칸은 Y/N/빈 칸만 (소문자 y·n은 허용)
 def test_use_column() -> None:
     bad = [["유형명", "TYPEID", "사용"], ["보험상품", "1100", "예"], ["특약", "1120", "y"]]
-    result = rows_to_profile(tabs(유형=bad, 별칭=None, 항목=None), "demo")
+    result = rows_to_profile(tabs(유형=bad, 별칭=None, 표준항목=None), "demo")
     assert [(e.code, e.row) for e in result.errors] == [("MV-08", 2)]
 
 
@@ -227,8 +227,8 @@ def test_collects_all_errors() -> None:
     result = rows_to_profile(
         tabs(
             유형=[["유형명", "TYPEID"], ["보험상품", "x"], ["특약", "1120"]],
-            항목=[["유형명", "항목명", "물리컬럼"], ["특약", "보장기간", "C1"]],
-            등록항목=[["항목명칭"], ["상품 코드"]],
+            표준항목=[["유형명", "항목명", "물리컬럼"], ["특약", "보장기간", "C1"]],
+            항목=[["항목명칭"], ["상품 코드"]],
         ),
         "demo",
     )
@@ -247,14 +247,14 @@ def test_no_cascade_from_broken_type() -> None:
 # 문제 16: 빈 행은 건너뛰고, 짧은 행은 빈 칸으로 채우고, 행 번호는 시트 그대로
 def test_blank_and_short_rows() -> None:
     rows = [["유형명", "TYPEID", "사용"], ["보험상품", "1100"], ["", "", ""], [], ["특약", "x"]]
-    result = rows_to_profile(tabs(유형=rows, 별칭=None, 항목=None), "demo")
+    result = rows_to_profile(tabs(유형=rows, 별칭=None, 표준항목=None), "demo")
     assert [(e.code, e.row) for e in result.errors] == [("MV-03", 5)]
 
 
 # 문제 17: 앞뒤 공백은 지우고 읽는다
 def test_cells_are_stripped() -> None:
     rows = [[" 유형명 ", "TYPEID "], [" 보험상품 ", " 1100 "]]
-    result = rows_to_profile(tabs(유형=rows, 별칭=None, 항목=None), "demo")
+    result = rows_to_profile(tabs(유형=rows, 별칭=None, 표준항목=None), "demo")
     assert result.profile is not None
     assert result.profile.types == {"보험상품": 1100}
 
@@ -274,3 +274,16 @@ def test_loader_check(monkeypatch: pytest.MonkeyPatch) -> None:
     result = rows_to_profile(BASE, "demo")
     assert result.profile is None
     assert codes(result.errors) == ["MV-09"]
+
+
+# 문제 20: 탭 이름 변경(2026-11-12) 전의 옛 시트 — `항목` 탭에 표준항목 헤더가 들어 있으면
+#          등록 항목명칭으로 잘못 읽지 않고 MV-01(헤더에 항목명칭 없음)로 막는다
+def test_old_tab_names_are_rejected() -> None:
+    old = tabs(
+        표준항목=None,
+        항목=[["유형명", "항목명", "물리컬럼"], ["보험상품", "보험기간", "CHAR01"]],
+    )
+    old["등록항목"] = [["항목명칭"], ["상품코드"]]
+    result = rows_to_profile(old, "demo")
+    assert result.profile is None
+    assert any(e.code == "MV-01" and e.tab == "항목" for e in result.errors)

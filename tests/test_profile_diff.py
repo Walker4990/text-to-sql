@@ -57,7 +57,7 @@ def test_alias_changes() -> None:
     assert summary(diff_profiles(OLD, moved)) == [("change", "별칭 라이더", True)]
 
 
-# 문제 5: 항목 — 삭제·물리컬럼 변경은 위험, 추가·다중값 변경은 안전
+# 문제 5: 표준항목 — 삭제·물리컬럼 변경은 위험, 추가·다중값 변경은 안전
 def test_item_changes() -> None:
     new = replace(
         OLD,
@@ -67,20 +67,20 @@ def test_item_changes() -> None:
         },
     )
     assert summary(diff_profiles(OLD, new)) == [
-        ("change", "항목 보험상품.보험기간", True),
-        ("change", "항목 보험상품.판매채널", False),
-        ("add", "항목 특약.보장기간", False),
+        ("change", "표준항목 보험상품.보험기간", True),
+        ("change", "표준항목 보험상품.판매채널", False),
+        ("add", "표준항목 특약.보장기간", False),
     ]
     gone = replace(OLD, items={"보험상품": {"보험기간": ItemDef("CHAR01")}})
-    assert summary(diff_profiles(OLD, gone)) == [("remove", "항목 보험상품.판매채널", True)]
+    assert summary(diff_profiles(OLD, gone)) == [("remove", "표준항목 보험상품.판매채널", True)]
 
 
-# 문제 6: 등록항목 추가·삭제는 안전
+# 문제 6: 항목(등록 항목명칭) 추가·삭제는 안전
 def test_registered_changes() -> None:
     new = replace(OLD, registered_items=["특약코드"])
     assert summary(diff_profiles(OLD, new)) == [
-        ("add", "등록항목 특약코드", False),
-        ("remove", "등록항목 상품코드", False),
+        ("add", "항목 특약코드", False),
+        ("remove", "항목 상품코드", False),
     ]
 
 

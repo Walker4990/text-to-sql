@@ -32,7 +32,7 @@ def test_export_files(tmp_path: Path) -> None:
     paths = export_csv(load_site_profile(str(SITES / "demo.json")), tmp_path, owner="홍길동")
     names = sorted(p.name for p in paths)
     assert names == sorted(
-        f"{tab}.csv" for tab in ("설정", "유형", "별칭", "항목", "등록항목", "테이블별칭")
+        f"{tab}.csv" for tab in ("설정", "유형", "별칭", "표준항목", "항목", "테이블별칭")
     )
     settings = (tmp_path / "설정.csv").read_bytes()
     assert settings.startswith(b"\xef\xbb\xbf")

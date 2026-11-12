@@ -19,8 +19,8 @@ from text_to_sql.repositories.profile_source import Tabs
 TAB_SETTINGS = "설정"
 TAB_TYPES = "유형"
 TAB_ALIASES = "별칭"
-TAB_ITEMS = "항목"
-TAB_REGISTERED = "등록항목"
+TAB_ITEMS = "표준항목"
+TAB_REGISTERED = "항목"  # 등록 항목명칭 (룰 변수로 쓰는 이름)
 TAB_TABLE_ALIASES = "테이블별칭"
 
 REQUIRED_TABS = (TAB_SETTINGS, TAB_TYPES)
@@ -346,7 +346,10 @@ class _Builder:
         return items
 
     def _registered(self) -> list[str]:
-        """등록항목 탭 → 항목명칭 목록 (시트 순서 유지. 첫 항목이 프롬프트 예시에 쓰인다)."""
+        """항목 탭(등록 항목명칭) → 항목명칭 목록.
+
+        시트 순서를 유지한다. 첫 항목이 프롬프트 예시에 쓰인다.
+        """
         names: list[str] = []
         seen: dict[str, int] = {}
         for row in self._rows(TAB_REGISTERED) or []:

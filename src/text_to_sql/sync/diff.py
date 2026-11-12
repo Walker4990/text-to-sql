@@ -105,10 +105,10 @@ def _yes_no(value: bool) -> str:
 
 
 def _diff_items(old: dict[str, ItemDef], new: dict[str, ItemDef]) -> list[Change]:
-    """항목은 물리컬럼(위험)과 다중값(안전)을 따로 본다."""
+    """표준항목은 물리컬럼(위험)과 다중값(안전)을 따로 본다."""
     changes: list[Change] = []
     for key, item in new.items():
-        target = f"항목 {key}"
+        target = f"표준항목 {key}"
         before = old.get(key)
         if before is None:
             changes.append(Change("add", target, _show_item(item)))
@@ -124,11 +124,11 @@ def _diff_items(old: dict[str, ItemDef], new: dict[str, ItemDef]) -> list[Change
             changes.append(Change("change", target, detail, True))
     for key, item in old.items():
         if key not in new:
-            changes.append(Change("remove", f"항목 {key}", _show_item(item), True))
+            changes.append(Change("remove", f"표준항목 {key}", _show_item(item), True))
     return changes
 
 
 def _diff_registered(old: list[str], new: list[str]) -> list[Change]:
-    changes = [Change("add", f"등록항목 {name}", "추가") for name in new if name not in old]
-    changes += [Change("remove", f"등록항목 {name}", "삭제") for name in old if name not in new]
+    changes = [Change("add", f"항목 {name}", "추가") for name in new if name not in old]
+    changes += [Change("remove", f"항목 {name}", "삭제") for name in old if name not in new]
     return changes

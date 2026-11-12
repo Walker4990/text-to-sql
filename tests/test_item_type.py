@@ -55,7 +55,7 @@ def test_sheet_type_column(cell: str, expected: str) -> None:
     tabs = {
         "설정": [["키", "값"], ["site", "t"]],
         "유형": [["유형명", "TYPEID"], ["연회비", "2120"]],
-        "항목": [
+        "표준항목": [
             ["유형명", "항목명", "물리컬럼", "형식"],
             ["연회비", "국내전용연회비", "CHAR01", cell],
         ],
@@ -71,7 +71,7 @@ def test_sheet_without_type_column() -> None:
     tabs = {
         "설정": [["키", "값"], ["site", "t"]],
         "유형": [["유형명", "TYPEID"], ["연회비", "2120"]],
-        "항목": [["유형명", "항목명", "물리컬럼"], ["연회비", "국내전용연회비", "CHAR01"]],
+        "표준항목": [["유형명", "항목명", "물리컬럼"], ["연회비", "국내전용연회비", "CHAR01"]],
     }
     result = rows_to_profile(tabs, "t")
     assert result.profile is not None
@@ -83,7 +83,7 @@ def test_sheet_bad_type() -> None:
     tabs = {
         "설정": [["키", "값"], ["site", "t"]],
         "유형": [["유형명", "TYPEID"], ["연회비", "2120"]],
-        "항목": [
+        "표준항목": [
             ["유형명", "항목명", "물리컬럼", "형식"],
             ["연회비", "국내전용연회비", "CHAR01", "정수"],
         ],
@@ -105,7 +105,7 @@ def test_diff_type_change_is_risky() -> None:
     new = replace(BASE, items={"연회비": {"국내전용연회비": ItemDef("CHAR01", type="number")}})
     changes = diff_profiles(BASE, new)
     assert [(c.kind, c.target, c.risky) for c in changes] == [
-        ("change", "항목 연회비.국내전용연회비", True)
+        ("change", "표준항목 연회비.국내전용연회비", True)
     ]
     assert "형식 text → number" in changes[0].detail
 
@@ -144,7 +144,7 @@ def test_csv_round_trip_keeps_type(tmp_path: Path) -> None:
         },
     )
     export_csv(profile, tmp_path)
-    text = (tmp_path / "항목.csv").read_text(encoding="utf-8-sig")
+    text = (tmp_path / "표준항목.csv").read_text(encoding="utf-8-sig")
     assert "국내전용연회비,CHAR01,N,숫자,Y," in text
     assert "비고,TEXT01,N,문자,Y," in text
     result = rows_to_profile(CsvFolderSource(tmp_path).read_tabs(), "t")
