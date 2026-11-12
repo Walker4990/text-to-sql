@@ -12,6 +12,7 @@ from text_to_sql.domain.intent import Intent
 from text_to_sql.errors import IntentParseError, UnsupportedQuestionError
 from text_to_sql.services.intent_extractor import IntentExtractor
 from text_to_sql.services.sql_builder import SqlBuilder, render_sql
+from text_to_sql.services.sql_formatter import format_sql
 from text_to_sql.services.sql_validator import SqlValidator
 
 logger = logging.getLogger(__name__)
@@ -58,7 +59,7 @@ class TextToSqlService:
             return _unsupported(str(err), intent)
 
         self.validator.validate(built.sql)
-        rendered = render_sql(built.sql, built.params)
+        rendered = format_sql(render_sql(built.sql, built.params))
 
         return GenerateResult(
             status="ok",

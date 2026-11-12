@@ -22,6 +22,7 @@ from text_to_sql.errors import IntentParseError, LlmUnavailableError, SqlValidat
 from text_to_sql.repositories.metadata_repository import load_common_metadata, load_site_profile
 from text_to_sql.services.intent_extractor import FakeIntentExtractor, IntentExtractor
 from text_to_sql.services.sql_builder import SqlBuilder, render_sql
+from text_to_sql.services.sql_formatter import format_sql
 from text_to_sql.services.sql_validator import SqlValidator
 from text_to_sql.services.text_to_sql_service import GenerateResult, TextToSqlService
 
@@ -71,13 +72,15 @@ def test_ok_result() -> None:
     assert result.message is None
 
 
-# 문제 2 (TS-02): rendered_sql은 render_sql(sql, params)의 결과다 (값이 채워진 복사용 SQL)
+# 문제 2 (TS-02): rendered_sql은 render_sql(sql, params)를 사람이 읽기 좋게 줄바꿈한 결과다
+#                 (값이 채워진 복사용 SQL. sql은 한 줄 그대로 둔다)
 def test_ok_result_has_rendered_sql() -> None:
     result = make_service(FakeIntentExtractor({QUESTION: LOOKUP})).generate(QUESTION, REQUEST_ID)
 
     assert result.sql is not None
     assert result.rendered_sql is not None
-    assert result.rendered_sql == render_sql(result.sql, result.params)
+    assert result.rendered_sql == format_sql(render_sql(result.sql, result.params))
+    assert "\n" in result.rendered_sql and "\n" not in result.sql
     assert "M.BIZCODE = 'BP001'" in result.rendered_sql
 
 
