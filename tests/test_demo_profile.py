@@ -79,3 +79,11 @@ def test_demo_questions_produce_validated_sql(intent: Intent) -> None:
     result = service.generate("q", "req-demo")
     assert result.status == "ok"
     assert result.params["type_id"] == profile.find_typeid(str(intent.target_type))
+
+
+# 시연 문장 "보험상품코드를 다중값으로 받고 …"의 항목명칭이 등록돼 있어야 거절되지 않는다
+# (모델은 질문 글자 그대로 항목명칭을 뽑으므로 상품코드로 바꿔 주지 않는다)
+@pytest.mark.parametrize("item", ["상품코드", "보험상품코드"])
+def test_demo_registered_items_include_demo_sentence_names(item: str) -> None:
+    profile = load_site_profile(DEMO_PATH)
+    assert item in profile.registered_items
