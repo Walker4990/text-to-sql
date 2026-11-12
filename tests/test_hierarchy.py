@@ -180,7 +180,8 @@ def test_demo_service_end_to_end() -> None:
 def test_prompt_describes_hierarchy() -> None:
     prompt = build_system_prompt(load_site_profile(DEMO_PATH))
     assert '"hierarchy"(여러 단계 구조 + 단계별 속성)' in prompt
-    assert "- hierarchy: target_type + (code 또는 code_item) + path" in prompt
+    # 값 조건(설계 08)이 생겨 코드 없이 conditions만으로도 계층 조회를 할 수 있다
+    assert "- hierarchy: target_type + path + (code 또는 code_item 또는 conditions)" in prompt
     assert "질문: A001 보험상품와 연결된 주계약 → 특약 구조 알려줘" in prompt
     assert '"path": ["주계약", "특약"]' in prompt
 

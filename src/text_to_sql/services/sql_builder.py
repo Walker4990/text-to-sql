@@ -7,15 +7,25 @@
 import re
 from dataclasses import dataclass
 
-from text_to_sql.domain.intent import Intent
+from text_to_sql.domain.intent import Condition, Intent
 from text_to_sql.errors import UnsupportedQuestionError
 from text_to_sql.repositories.metadata_repository import ItemDef, Metadata, SiteProfile
 
 # 템플릿이 있는 질문 종류 (T1 lookup, T2 list, T3·T4 structure, T5 attribute, 계층 hierarchy)
 _IMPLEMENTED_KINDS = frozenset({"lookup", "list", "structure", "attribute", "hierarchy"})
+# 계층 조회에서 SQL 별칭으로 쓰는 유형 이름 형식
+_LABEL = re.compile(r"[가-힣A-Za-z0-9_]{1,30}")
+_BIND_PARAM = re.compile(r"(?<!:):(\w+)")
+
+# 값 조건. 숫자 값 형식: 정수 또는 소수점 아래 6자리까지
+_NUMBER_VALUE = re.compile(r"-?[0-9]{1,15}(?:\.[0-9]{1,6})?")
+_NUMBER_OPS = {"eq": "=", "ne": "<>", "lt": "<", "le": "<=", "gt": ">", "ge": ">="}
+_TEXT_OPS = {"eq": "=", "ne": "<>"}
+# 조건이 걸린 항목: (조건 번호, 조건, 항목 정의). 번호는 바인드 변수 이름(cond_N)에 쓴다
+_Resolved = tuple[int, Condition, ItemDef]
 
 
-# [스프링] 응답 VO. build()가 돌려주는 결과 묶음
+# build()가 돌려주는 결과 묶음
 @dataclass
 class BuiltSql:
     sql: str
@@ -42,6 +52,93 @@ class SqlBuilder:
             return f"{alias}.BIZCODE = <$@[{name}]@$>"
         params["code"] = intent.code
         return f"{alias}.BIZCODE = :code"
+
+    # ───── 값 조건 ─────
+
+    def _number_column(self, column: str) -> str:
+        """문자열 컬럼을 숫자로 바꾸는 식.
+
+        숫자가 아닌 값은 오류 대신 NULL이 되어 비교에서 빠진다."""
+        dialect = self.common.dialect.lower()
+        if dialect == "postgresql":
+            return (
+                rf"CASE WHEN {column} ~ '^-?[0-9]+(\.[0-9]+)?$' "
+                f"THEN CAST({column} AS NUMERIC) END"
+            )
+        if dialect == "oracle":
+            return (
+                rf"CASE WHEN REGEXP_LIKE({column}, '^-?[0-9]+(\.[0-9]+)?$') "
+                f"THEN TO_NUMBER({column}) END"
+            )
+        raise UnsupportedQuestionError(
+            f"값 조건을 지원하지 않는 DB 방언입니다: {self.common.dialect}"
+        )
+
+    def _number_param(self, name: str) -> str:
+        """소수 값은 문자열로 바인딩하므로 SQL에서 숫자로 바꾼다."""
+        return (
+            f"TO_NUMBER(:{name})"
+            if self.common.dialect.lower() == "oracle"
+            else (f"CAST(:{name} AS NUMERIC)")
+        )
+
+    def _condition_sql(
+        self,
+        alias: str,
+        item: ItemDef,
+        number: int,
+        condition: Condition,
+        params: dict[str, object],
+    ) -> str:
+        """조건 하나를 WHERE 조각으로 만든다. 값은 바인드 변수 cond_N으로만 넣는다."""
+        name = f"cond_{number}"
+        column = f"{alias}.{item.column}"
+        if item.type == "number":
+            symbol = _NUMBER_OPS.get(condition.op)
+            if symbol is None:
+                raise UnsupportedQuestionError(
+                    f"'{condition.item}'은(는) 숫자 항목이라 '{condition.op}' 조건을 쓸 수 없습니다"
+                )
+            if not _NUMBER_VALUE.fullmatch(condition.value):
+                raise UnsupportedQuestionError(
+                    f"숫자 조건의 값이 숫자 형식이 아닙니다: {condition.value}"
+                )
+            expr = self._number_column(column)
+            if "." in condition.value:
+                params[name] = condition.value
+                return f"{expr} {symbol} {self._number_param(name)}"
+            params[name] = int(condition.value)
+            return f"{expr} {symbol} :{name}"
+        if condition.op == "contains":
+            params[name] = f"%{_escape_like(condition.value)}%"
+            return f"{column} LIKE :{name} ESCAPE '\\'"
+        text_symbol = _TEXT_OPS.get(condition.op)
+        if text_symbol is None:
+            raise UnsupportedQuestionError(
+                f"'{condition.item}'은(는) 문자 항목이라 '{condition.op}' 조건을 쓸 수 없습니다"
+            )
+        params[name] = condition.value
+        return f"{column} {text_symbol} :{name}"
+
+    def _resolve_own_conditions(self, intent: Intent) -> list[_Resolved]:
+        """list·attribute: 조건 항목은 모두 target_type의 항목이어야 한다."""
+        if not intent.conditions or intent.target_type is None:
+            return []
+        return [
+            (number, condition, self.profile.find_item(intent.target_type, condition.item))
+            for number, condition in enumerate(intent.conditions)
+        ]
+
+    def _base_date_conditions(
+        self, aliases: list[str], intent: Intent, params: dict[str, object]
+    ) -> list[str]:
+        """기준일자: 쿼리의 OBJ_MAIN 별칭마다 적용기간 조건.
+
+        VF_DT/VT_DT의 의미가 미확정이라 OBJ_MAIN에만 건다."""
+        if not intent.base_date:
+            return []
+        params["base_dt"] = intent.base_date
+        return [f":base_dt BETWEEN {a}.VF_DT AND {a}.VT_DT" for a in aliases]
 
     def build(self, intent: Intent) -> BuiltSql:
         if intent.kind == "unsupported":
@@ -72,13 +169,30 @@ class SqlBuilder:
             conditions.append(f"{m}.OBJ_NAME LIKE :name_keyword ESCAPE '\\'")
             params["name_keyword"] = f"%{_escape_like(intent.name_keyword)}%"
 
-        if intent.base_date:
-            conditions.append(f":base_dt BETWEEN {m}.VF_DT AND {m}.VT_DT")
-            params["base_dt"] = intent.base_date
+        conditions += self._base_date_conditions([m], intent, params)
+
+        # 값 조건이 있으면(list) OBJ_DETAIL을 조인하고, 조건 항목 값도 결과 열에 보여 준다
+        columns = [f"{m}.SID", f"{m}.BIZCODE", f"{m}.OBJ_NAME"]
+        source = f"OBJ_MAIN {m}"
+        resolved = self._resolve_own_conditions(intent)
+        detail_conditions: list[str] = []
+        if resolved:
+            d = self.profile.table_aliases["detail"]
+            detail = self.common.find_table("OBJ_DETAIL")
+            source += f" JOIN OBJ_DETAIL {d} ON {d}.SID = {m}.SID"
+            columns += _item_columns(d, resolved, shown=set())
+            conditions.append(f"{d}.KIND = :detail_kind")
+            params["detail_kind"] = 1
+            conditions += [
+                self._condition_sql(d, item, number, condition, params)
+                for number, condition, item in resolved
+            ]
+            detail_conditions.append(f"{d}.{detail.version_column} = '{detail.version_value}'")
 
         conditions.append(f"{m}.{table.version_column} = '{table.version_value}'")
+        conditions += detail_conditions
         where = " AND ".join(conditions)
-        query = f"SELECT {m}.SID, {m}.BIZCODE, {m}.OBJ_NAME FROM OBJ_MAIN {m} WHERE {where} "
+        query = f"SELECT {', '.join(columns)} FROM {source} WHERE {where} "
         order_by = ""
         if intent.kind == "list":
             order_by = f"ORDER BY {m}.BIZCODE"
@@ -107,6 +221,7 @@ class SqlBuilder:
             self._code_condition(base, intent, params),
         ]
 
+        conditions += self._base_date_conditions([p, c], intent, params)
         conditions.append(f"{p}.{table1.version_column} = '{table1.version_value}'")
         conditions.append(f"{i}.{table2.version_column} = '{table2.version_value}'")
         conditions.append(f"{c}.{table1.version_column} = '{table1.version_value}'")
@@ -138,6 +253,8 @@ class SqlBuilder:
         # 항목 컬럼·별칭은 사전에서 검증된 값만 들어온다 (바인드 불가 위치라 직접 삽입)
         columns = [f"{m}.BIZCODE", f"{m}.OBJ_NAME"]
         columns += [f'{d}.{item.column} "{name}"' for name, item in items]
+        resolved = self._resolve_own_conditions(intent)
+        columns += _item_columns(d, resolved, shown=set(names))  # 조건 항목 값도 보여 준다
         conditions = [f"{m}.TYPEID = :type_id"]
         params: dict[str, object] = {"type_id": type_id}
         if intent.code or intent.code_item:
@@ -145,9 +262,14 @@ class SqlBuilder:
         elif intent.name_keyword:
             conditions.append(f"{m}.OBJ_NAME LIKE :name_keyword ESCAPE '\\'")
             params["name_keyword"] = f"%{_escape_like(intent.name_keyword)}%"
+        conditions += self._base_date_conditions([m], intent, params)
         # KIND = 1: 오브젝트 기본 속성 행
         conditions.append(f"{d}.KIND = :detail_kind")
         params["detail_kind"] = 1
+        conditions += [
+            self._condition_sql(d, item, number, condition, params)
+            for number, condition, item in resolved
+        ]
         conditions.append(f"{m}.{main.version_column} = '{main.version_value}'")
         conditions.append(f"{d}.{detail.version_column} = '{detail.version_value}'")
 
@@ -184,6 +306,7 @@ class SqlBuilder:
             if outside:
                 raise UnsupportedQuestionError(f"경로에 없는 유형의 항목입니다: {sorted(outside)}")
 
+        by_level = self._resolve_level_conditions(intent, level_types)
         params: dict[str, object] = {}
         columns: list[str] = []
         joins: list[str] = []
@@ -198,7 +321,9 @@ class SqlBuilder:
             columns += [f'{level}.BIZCODE "{type_name}"', f'{level}.OBJ_NAME "{type_name}명"']
             if n == 0:
                 conditions.append(f"{level}.TYPEID = :{key}")
-                conditions.append(self._code_condition(level, intent, params))
+                # 코드 없이 값 조건만으로 거르는 질문도 있다
+                if intent.code or intent.code_item:
+                    conditions.append(self._code_condition(level, intent, params))
             else:
                 link = f"I{n}"
                 joins.append(f"JOIN OBJ_INV {link} ON {link}.SID = L{n - 1}.SID")
@@ -209,7 +334,14 @@ class SqlBuilder:
                 conditions.append(f"{link}.{inv.version_column} = '{inv.version_value}'")
             conditions.append(f"{level}.{main.version_column} = '{main.version_value}'")
 
-            items = self._level_items(type_name, n, wanted)
+            items = list(self._level_items(type_name, n, wanted))
+            level_conditions = by_level.get(n, [])
+            # 조건이 걸린 항목은 출력 항목을 골랐어도 값을 같이 보여 준다
+            shown = {name for name, _ in items}
+            for _, condition, item in level_conditions:
+                if condition.item not in shown:
+                    items.append((condition.item, item))
+                    shown.add(condition.item)
             if items:
                 d = f"D{n}"
                 params["detail_kind"] = 1
@@ -223,6 +355,14 @@ class SqlBuilder:
                     label = name if name not in used_labels else f"{type_name}_{name}"
                     used_labels.add(label)
                     columns.append(f'{d}.{item.column} "{label}"')
+                conditions += [
+                    self._condition_sql(d, item, number, condition, params)
+                    for number, condition, item in level_conditions
+                ]
+
+        conditions += self._base_date_conditions(
+            [f"L{n}" for n in range(len(level_types))], intent, params
+        )
 
         order = ", ".join(f"L{n}.BIZCODE" for n in range(len(level_types)))
         query = (
@@ -232,6 +372,30 @@ class SqlBuilder:
             f"ORDER BY {order}"
         )
         return BuiltSql(sql=query, params=params)
+
+    def _resolve_level_conditions(
+        self, intent: Intent, level_types: list[str]
+    ) -> dict[int, list[_Resolved]]:
+        """계층 조회: 조건 항목 이름으로 어느 단계의 항목인지 정한다.
+
+        항목 이름이 정확히 한 유형에만 있어야 한다."""
+        by_level: dict[int, list[_Resolved]] = {}
+        for number, condition in enumerate(intent.conditions or []):
+            levels = [
+                n
+                for n, type_name in enumerate(level_types)
+                if condition.item in self.profile.items.get(type_name, {})
+            ]
+            if not levels:
+                raise UnsupportedQuestionError(f"경로의 유형에 없는 항목입니다: {condition.item}")
+            if len(levels) > 1:
+                names = ", ".join(level_types[n] for n in levels)
+                raise UnsupportedQuestionError(
+                    f"여러 유형에 있는 항목이라 단계를 정할 수 없습니다: {condition.item} ({names})"
+                )
+            item = self.profile.find_item(level_types[levels[0]], condition.item)
+            by_level.setdefault(levels[0], []).append((number, condition, item))
+        return by_level
 
     def _level_items(
         self, type_name: str, level: int, wanted: dict[str, list[str]] | None
@@ -246,10 +410,14 @@ class SqlBuilder:
         return [(name, self.profile.find_item(type_name, name)) for name in names]
 
 
-# 계층 조회에서 SQL 별칭으로 쓰는 유형 이름 형식
-_LABEL = re.compile(r"[가-힣A-Za-z0-9_]{1,30}")
-
-_BIND_PARAM = re.compile(r"(?<!:):(\w+)")
+def _item_columns(alias: str, resolved: list[_Resolved], shown: set[str]) -> list[str]:
+    """조건이 걸린 항목의 값을 결과 열로 만든다. 이미 보여 주는 항목(shown)은 건너뛴다."""
+    columns: list[str] = []
+    for _, condition, item in resolved:
+        if condition.item not in shown:
+            shown.add(condition.item)
+            columns.append(f'{alias}.{item.column} "{condition.item}"')
+    return columns
 
 
 def render_sql(sql: str, params: dict[str, object]) -> str:

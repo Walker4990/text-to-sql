@@ -7,3 +7,12 @@ __pycache__/
 build/
 dist/
 .env
+
+# 구글 서비스 계정 키 (절대 커밋하지 않는다)
+*credentials*.json
+service_account*.json
+# 동기화 도구가 쓰는 임시 파일
+*.json.tmp
+
+# 로컬 도구 설정 (이 PC 경로가 들어 있음)
+.claude/

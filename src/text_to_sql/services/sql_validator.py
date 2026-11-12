@@ -27,13 +27,11 @@ _SOLUTION_COMMENT = re.compile(r"<\$@.*?@\$>", re.DOTALL)
 _SELECT_START = re.compile(r"\s*SELECT\b", re.IGNORECASE)
 _LITERAL = re.compile(r"'(?:[^']|'')*'")
 _FORBIDDEN = re.compile(r"\b(?:" + "|".join(FORBIDDEN_KEYWORD) + r")\b", re.IGNORECASE)
-_DANGEROUS_FUNCTION = re.compile(
-    r"\b(?:pg_\w*|lo_import|lo_export|dblink\w*)\s*\(", re.IGNORECASE
-)  # 8단계
+_DANGEROUS_FUNCTION = re.compile(r"\b(?:pg_\w*|lo_import|lo_export|dblink\w*)\s*\(", re.IGNORECASE)
 _TABLE_SECTION = re.compile(
     r"\b(?:FROM|JOIN)\s+(?!\()(.*?)(?=\b(?:WHERE|JOIN|ON|GROUP|ORDER|UNION|HAVING|LEFT|RIGHT|INNER|FULL|CROSS|LIMIT|OFFSET|FOR)\b|\)|$)",
     re.IGNORECASE | re.DOTALL,
-)  # 9단계
+)
 
 
 def _fail(rule: str, message: str) -> NoReturn:

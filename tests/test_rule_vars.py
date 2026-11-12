@@ -36,7 +36,7 @@ from text_to_sql.repositories.metadata_repository import (
 )
 from text_to_sql.services.intent_extractor import (
     FakeIntentExtractor,
-    OpenAiIntentExtractor,
+    OllamaIntentExtractor,
     build_system_prompt,
 )
 from text_to_sql.services.sql_builder import SqlBuilder, render_sql
@@ -81,14 +81,14 @@ def write_profile(tmp_path: Path, registered_items: object) -> str:
     return str(path)
 
 
-def fake_openai(content: str, profile: SiteProfile) -> OpenAiIntentExtractor:
-    """content(JSON 문자열)를 그대로 돌려주는 가짜 OpenAI 서버를 단 추출기."""
+def fake_ollama(content: str, profile: SiteProfile) -> OllamaIntentExtractor:
+    """content(JSON 문자열)를 그대로 돌려주는 가짜 Ollama 서버를 단 추출기."""
 
     def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json={"choices": [{"message": {"content": content}}]})
+        return httpx.Response(200, json={"message": {"role": "assistant", "content": content}})
 
-    client = httpx.Client(base_url="http://openai.test/v1", transport=httpx.MockTransport(handler))
-    return OpenAiIntentExtractor(client, "gpt-test", profile)
+    client = httpx.Client(base_url="http://ollama.test", transport=httpx.MockTransport(handler))
+    return OllamaIntentExtractor(client, "qwen-test", profile)
 
 
 # ───────────── 1단계: 등록 항목 목록 (registered_items, find_registered_item) ─────────────
@@ -310,11 +310,12 @@ def test_prompt_lists_registered_items() -> None:
     assert "[등록 항목]" not in without
 
 
-# 문제 23: 스키마에 code_item·code_item_multi 설명과, code 대신 쓸 수 있다는 안내가 있다
+# 문제 23: 스키마에 code_item 설명과, code 대신 쓸 수 있다는 안내가 있다
+# (2026-11-11) code_item_multi는 모델이 아니라 추출기가 정하므로 프롬프트에서 뺐다
 def test_prompt_describes_code_item() -> None:
     prompt = build_system_prompt(item_profile())
     assert "- code_item: " in prompt
-    assert "- code_item_multi: " in prompt
+    assert "code_item_multi" not in prompt
     assert "- code_item은 code 대신 쓸 수 있다 (lookup·structure·attribute·hierarchy)" in prompt
 
 
@@ -330,13 +331,13 @@ def test_prompt_code_item_example() -> None:
 def test_extractor_rejects_code_item_not_in_question() -> None:
     content = '{"kind": "lookup", "target_type": "기본상품", "code_item": "상품코드"}'
     with pytest.raises(IntentParseError):
-        fake_openai(content, item_profile()).extract("BP001 기본상품 알려줘")
+        fake_ollama(content, item_profile()).extract("BP001 기본상품 알려줘")
 
 
 # 문제 26: 질문에 띄어 써도("상품 코드") 같은 이름으로 본다
 def test_extractor_accepts_code_item_with_spaces() -> None:
     content = '{"kind": "lookup", "target_type": "기본상품", "code_item": "상품코드"}'
-    intent = fake_openai(content, item_profile()).extract("상품 코드 항목으로 기본상품 알려줘")
+    intent = fake_ollama(content, item_profile()).extract("상품 코드 항목으로 기본상품 알려줘")
     assert intent.code_item == "상품코드"
 
 
@@ -380,11 +381,10 @@ def test_demo_unregistered_code_item_is_unsupported() -> None:
 # ───────────── 2026-11-10 보강: 프롬프트 규칙과 실패 로그 ─────────────
 
 
-# 문제 29: 항목명칭을 code에 넣지 말라는 규칙과, 단일 값(false)·속성 조합 예시가 있다
+# 문제 29: 항목명칭을 code에 넣지 말라는 규칙과, 속성 조합 예시가 있다
 def test_prompt_guides_code_item_usage() -> None:
     prompt = build_system_prompt(item_profile())
     assert "항목명칭(예: 상품코드)은 code가 아니라 code_item에 넣는다" in prompt
-    assert '"code_item": "상품코드", "code_item_multi": false}' in prompt
     assert "질문: 상품코드 여러 개로 기본상품의 약정기간 알려줘" in prompt
 
 
@@ -395,5 +395,35 @@ def test_schema_violation_logs_llm_content(caplog: pytest.LogCaptureFixture) -> 
         '"attributes": ["약정기간"]}'
     )
     with pytest.raises(IntentParseError):
-        fake_openai(content, item_profile()).extract("계좌상품코드 여러 개로 약정기간")
+        fake_ollama(content, item_profile()).extract("계좌상품코드 여러 개로 약정기간")
     assert "계좌상품코드" in caplog.text
+
+
+# ───────────── 2026-11-11 보강: 단일·다중은 추출기가 질문 글자로 정한다 ─────────────
+# 작은 로컬 모델은 "여러 개"라고 해도 false를 자주 냈다. 그래서 모델 답을 쓰지 않고
+# 질문에 "하나", "한 개", "1개", "단일"이 있을 때만 단일(=), 나머지는 다중(IN)으로 정한다
+
+
+# 문제 31: 질문에 단일을 뜻하는 말이 있으면 code_item_multi=False
+@pytest.mark.parametrize(
+    "question",
+    [
+        "상품코드 하나로 기본상품 알려줘",
+        "상품코드 한 개로 기본상품 알려줘",
+        "상품코드 1개로 기본상품 알려줘",
+        "상품코드 단일값으로 기본상품 알려줘",
+    ],
+)
+def test_extractor_sets_single_from_question(question: str) -> None:
+    content = '{"kind": "lookup", "target_type": "기본상품", "code_item": "상품코드"}'
+    assert fake_ollama(content, item_profile()).extract(question).code_item_multi is False
+
+
+# 문제 32: 단일이라는 말이 없으면 모델이 false라고 답해도 다중(True)
+def test_extractor_ignores_model_single_answer() -> None:
+    content = (
+        '{"kind": "lookup", "target_type": "기본상품", "code_item": "상품코드", '
+        '"code_item_multi": false}'
+    )
+    intent = fake_ollama(content, item_profile()).extract("상품코드 여러 개로 기본상품 알려줘")
+    assert intent.code_item_multi is True

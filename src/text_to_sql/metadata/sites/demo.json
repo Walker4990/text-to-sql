@@ -54,10 +54,12 @@
         "column": "CHAR02"
       },
       "가입최저나이": {
-        "column": "CHAR03"
+        "column": "CHAR03",
+        "type": "number"
       },
       "가입최고나이": {
-        "column": "CHAR04"
+        "column": "CHAR04",
+        "type": "number"
       },
       "판매채널": {
         "column": "CHAR05",
@@ -66,10 +68,12 @@
     },
     "주계약": {
       "보험가입금액": {
-        "column": "CHAR01"
+        "column": "CHAR01",
+        "type": "number"
       },
       "보험료": {
-        "column": "CHAR02"
+        "column": "CHAR02",
+        "type": "number"
       },
       "납입주기": {
         "column": "CHAR03"
@@ -83,12 +87,14 @@
         "column": "CHAR02"
       },
       "특약보험료": {
-        "column": "CHAR03"
+        "column": "CHAR03",
+        "type": "number"
       }
     },
     "보장": {
       "보장금액": {
-        "column": "CHAR01"
+        "column": "CHAR01",
+        "type": "number"
       },
       "지급사유": {
         "column": "TEXT01"
@@ -99,7 +105,8 @@
     },
     "보험료율": {
       "적용요율": {
-        "column": "CHAR01"
+        "column": "CHAR01",
+        "type": "number"
       },
       "연령구간": {
         "column": "CHAR02"
@@ -123,7 +130,8 @@
         "multi": true
       },
       "전월실적기준": {
-        "column": "CHAR05"
+        "column": "CHAR05",
+        "type": "number"
       }
     },
     "카드혜택": {
@@ -131,10 +139,12 @@
         "column": "CHAR01"
       },
       "할인율": {
-        "column": "CHAR02"
+        "column": "CHAR02",
+        "type": "number"
       },
       "월한도": {
-        "column": "CHAR03"
+        "column": "CHAR03",
+        "type": "number"
       },
       "혜택상세": {
         "column": "TEXT01"
@@ -142,13 +152,16 @@
     },
     "연회비": {
       "국내전용연회비": {
-        "column": "CHAR01"
+        "column": "CHAR01",
+        "type": "number"
       },
       "해외겸용연회비": {
-        "column": "CHAR02"
+        "column": "CHAR02",
+        "type": "number"
       },
       "가족카드연회비": {
-        "column": "CHAR03"
+        "column": "CHAR03",
+        "type": "number"
       }
     },
     "제휴가맹점": {
@@ -156,7 +169,8 @@
         "column": "CHAR01"
       },
       "제휴할인율": {
-        "column": "CHAR02"
+        "column": "CHAR02",
+        "type": "number"
       },
       "가맹점주소": {
         "column": "TEXT01"
@@ -170,7 +184,8 @@
         "column": "CHAR02"
       },
       "환매수수료율": {
-        "column": "CHAR03"
+        "column": "CHAR03",
+        "type": "number"
       },
       "투자지역": {
         "column": "CHAR04",
@@ -180,7 +195,8 @@
         "column": "CHAR05"
       },
       "기준가": {
-        "column": "CHAR06"
+        "column": "CHAR06",
+        "type": "number"
       },
       "투자설명": {
         "column": "TEXT01"
@@ -191,13 +207,15 @@
         "column": "CHAR01"
       },
       "총보수": {
-        "column": "CHAR02"
+        "column": "CHAR02",
+        "type": "number"
       },
       "상장시장": {
         "column": "CHAR03"
       },
       "추적배수": {
-        "column": "CHAR04"
+        "column": "CHAR04",
+        "type": "number"
       }
     },
     "계좌상품": {
@@ -205,10 +223,12 @@
         "column": "CHAR01"
       },
       "최소가입금액": {
-        "column": "CHAR02"
+        "column": "CHAR02",
+        "type": "number"
       },
       "이자율": {
-        "column": "CHAR03"
+        "column": "CHAR03",
+        "type": "number"
       },
       "가입채널": {
         "column": "CHAR04",
@@ -217,10 +237,12 @@
     },
     "거래수수료": {
       "수수료율": {
-        "column": "CHAR01"
+        "column": "CHAR01",
+        "type": "number"
       },
       "최소수수료": {
-        "column": "CHAR02"
+        "column": "CHAR02",
+        "type": "number"
       },
       "적용시장": {
         "column": "CHAR03"

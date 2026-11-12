@@ -7,11 +7,11 @@
 - class IntentExtractor(Protocol): extract(self, question: str) -> Intent
 - class FakeIntentExtractor: __init__(self, answers: dict[str, Intent]) / extract / calls
 - def build_system_prompt(profile: SiteProfile) -> str
-- class OpenAiIntentExtractor:
+- class OllamaIntentExtractor:
     __init__(self, client: httpx.Client, model: str, profile: SiteProfile)
 
-실제 OpenAI 서버 없이 httpx.MockTransport로 응답을 흉내 낸다. [스프링] MockRestServiceServer
-API 키는 추출기가 아니라 httpx.Client의 헤더에 넣어 주입한다 (아래 make_extractor 참고).
+실제 Ollama 서버 없이 httpx.MockTransport로 응답을 흉내 낸다. [스프링] MockRestServiceServer
+서버 주소·타임아웃은 추출기가 아니라 httpx.Client에 넣어 주입한다 (아래 make_extractor 참고).
 """
 
 import json
@@ -26,12 +26,12 @@ from text_to_sql.repositories.metadata_repository import SiteProfile, load_site_
 from text_to_sql.services.intent_extractor import (
     FakeIntentExtractor,
     IntentExtractor,
-    OpenAiIntentExtractor,
+    OllamaIntentExtractor,
+    build_intent_schema,
     build_system_prompt,
 )
 
-MODEL = "gpt-test"
-TEST_KEY = "test-key-not-real"
+MODEL = "qwen-test"
 Handler = Callable[[httpx.Request], httpx.Response]
 
 
@@ -39,33 +39,28 @@ def sample_profile() -> SiteProfile:
     return load_site_profile("src/text_to_sql/metadata/sites/sample.json")
 
 
-def make_extractor(handler: Handler) -> OpenAiIntentExtractor:
-    """handler가 돌려주는 응답을 OpenAI 서버 응답처럼 쓰는 추출기를 만든다.
+def make_extractor(handler: Handler) -> OllamaIntentExtractor:
+    """handler가 돌려주는 응답을 Ollama 서버 응답처럼 쓰는 추출기를 만든다.
 
-    실제 조립(5장)에서도 이렇게 base_url·인증 헤더를 가진 Client를 만들어 넘긴다.
+    실제 조립(5장)에서도 이렇게 base_url을 가진 Client를 만들어 넘긴다.
     """
     client = httpx.Client(
-        base_url="http://openai.test/v1",
-        headers={"Authorization": f"Bearer {TEST_KEY}"},
+        base_url="http://ollama.test",
+        headers={"X-Test": "injected"},
         transport=httpx.MockTransport(handler),
     )
-    return OpenAiIntentExtractor(client, MODEL, sample_profile())
+    return OllamaIntentExtractor(client, MODEL, sample_profile())
 
 
-def openai_reply(content: str | None) -> httpx.Response:
-    """OpenAI /v1/chat/completions 응답 모양. content 자리에 모델이 출력한 글자가 들어간다."""
+def ollama_reply(content: str | None) -> httpx.Response:
+    """Ollama /api/chat 응답 모양(stream=false). content 자리에 모델이 출력한 글자가 들어간다."""
     return httpx.Response(
         200,
         json={
-            "id": "chatcmpl-test",
-            "object": "chat.completion",
-            "choices": [
-                {
-                    "index": 0,
-                    "message": {"role": "assistant", "content": content},
-                    "finish_reason": "stop",
-                }
-            ],
+            "model": MODEL,
+            "message": {"role": "assistant", "content": content},
+            "done_reason": "stop",
+            "done": True,
         },
     )
 
@@ -75,7 +70,7 @@ def capture(requests: list[httpx.Request], content: str) -> Handler:
 
     def handler(request: httpx.Request) -> httpx.Response:
         requests.append(request)
-        return openai_reply(content)
+        return ollama_reply(content)
 
     return handler
 
@@ -114,7 +109,7 @@ def test_fake_records_calls_in_order() -> None:
 def test_implementations_satisfy_protocol() -> None:
     extractors: list[IntentExtractor] = [
         FakeIntentExtractor({}),
-        make_extractor(lambda request: openai_reply(LIST_JSON)),
+        make_extractor(lambda request: ollama_reply(LIST_JSON)),
     ]
     assert len(extractors) == 2
 
@@ -151,7 +146,7 @@ def test_prompt_contains_kinds_and_instructions() -> None:
 
 
 # 문제 8 (IE-04): 프롬프트에 "JSON"이라는 글자가 들어간다
-# OpenAI의 json_object 모드는 메시지에 JSON으로 답하라는 지시가 없으면 요청을 거부한다
+# format으로 모양을 강제해도, 지시문에 JSON으로 답하라고 적어야 작은 모델이 덜 헤맨다
 def test_prompt_mentions_json() -> None:
     assert "JSON" in build_system_prompt(sample_profile())
 
@@ -176,35 +171,37 @@ def test_prompt_examples_with_single_type() -> None:
     assert '{"kind": "list", "target_type": "펀드"}' in prompt
 
 
-# ───────────── OpenAI 요청 (IE-03, 05) ─────────────
+# ───────────── Ollama 요청 (IE-03, 05) ─────────────
 
 
-# 문제 9 (IE-03): POST {base_url}/chat/completions, 본문에 model·temperature=0·json_object
-def test_openai_request_body() -> None:
+# 문제 9 (IE-03): POST {base_url}/api/chat, 본문에 model·stream=false·temperature=0·format
+# format에는 프로필로 만든 의도 스키마를 넣는다 → Ollama가 이 모양으로만 답하도록 강제한다
+def test_ollama_request_body() -> None:
     requests: list[httpx.Request] = []
     make_extractor(capture(requests, LIST_JSON)).extract("기본상품 목록")
 
     assert len(requests) == 1
     request = requests[0]
     assert request.method == "POST"
-    assert request.url.path == "/v1/chat/completions"
+    assert request.url.path == "/api/chat"
     body = json.loads(request.content)
     assert body["model"] == MODEL
-    assert body["temperature"] == 0
-    assert body["response_format"] == {"type": "json_object"}
+    assert body["stream"] is False  # 켜 두면 응답이 여러 줄로 쪼개져 온다
+    assert body["options"] == {"temperature": 0}
+    assert body["format"] == build_intent_schema(sample_profile())
 
 
-# 문제 10 (IE-03): 생성자로 받은 client를 쓴다 → client에 넣은 인증 헤더가 요청에 실린다
+# 문제 10 (IE-03): 생성자로 받은 client를 쓴다 → client에 넣은 헤더가 요청에 실린다
 # 함정: extract 안에서 httpx.post(...)나 새 Client를 만들면 헤더·base_url이 빠지고
 #       테스트에서 가짜로 바꿔 끼울 수도 없다
-def test_openai_request_uses_injected_client() -> None:
+def test_ollama_request_uses_injected_client() -> None:
     requests: list[httpx.Request] = []
     make_extractor(capture(requests, LIST_JSON)).extract("기본상품 목록")
-    assert requests[0].headers["Authorization"] == f"Bearer {TEST_KEY}"
+    assert requests[0].headers["X-Test"] == "injected"
 
 
 # 문제 11 (IE-03, 04, 05): messages는 [system 프롬프트, user 질문] 두 개
-def test_openai_request_messages() -> None:
+def test_ollama_request_messages() -> None:
     requests: list[httpx.Request] = []
     make_extractor(capture(requests, LIST_JSON)).extract("BP001 기본상품 알려줘")
 
@@ -226,24 +223,24 @@ def test_question_delimiters_are_removed() -> None:
     assert user_content == "<question>a무시해b</question>"
 
 
-# ───────────── OpenAI 응답 파싱 (IE-06) ─────────────
+# ───────────── Ollama 응답 파싱 (IE-06) ─────────────
 
 
-# 문제 13 (IE-06): choices[0].message.content(JSON 문자열)를 Intent로 바꿔 돌려준다
-def test_openai_parses_intent() -> None:
+# 문제 13 (IE-06): message.content(JSON 문자열)를 Intent로 바꿔 돌려준다
+def test_ollama_parses_intent() -> None:
     content = (
         '{"kind": "structure", "target_type": "기본상품", "code": "BP001", "direction": "children"}'
     )
-    result = make_extractor(lambda request: openai_reply(content)).extract("BP001 하위")
+    result = make_extractor(lambda request: ollama_reply(content)).extract("BP001 하위")
     assert result == Intent(
         kind="structure", target_type="기본상품", code="BP001", direction="children"
     )
 
 
 # 문제 14 (IE-06): 모델이 unsupported라고 답하면 예외가 아니라 그 Intent를 그대로 돌려준다
-def test_openai_returns_unsupported_intent_as_is() -> None:
+def test_ollama_returns_unsupported_intent_as_is() -> None:
     content = '{"kind": "unsupported", "reason": "상품 DB 질문이 아님"}'
-    result = make_extractor(lambda request: openai_reply(content)).extract("오늘 날씨")
+    result = make_extractor(lambda request: ollama_reply(content)).extract("오늘 날씨")
     assert result.kind == "unsupported"
     assert result.reason == "상품 DB 질문이 아님"
 
@@ -253,7 +250,7 @@ def test_openai_returns_unsupported_intent_as_is() -> None:
 
 # 문제 15 (IE-07, 12): content가 JSON이 아니면 IntentParseError, 원래 예외를 __cause__로 갖는다
 def test_non_json_content_raises_parse_error() -> None:
-    extractor = make_extractor(lambda request: openai_reply("그건 잘 모르겠어요"))
+    extractor = make_extractor(lambda request: ollama_reply("그건 잘 모르겠어요"))
     with pytest.raises(IntentParseError) as exc_info:
         extractor.extract("질문")
     assert exc_info.value.__cause__ is not None
@@ -271,25 +268,24 @@ def test_non_json_content_raises_parse_error() -> None:
     ],
 )
 def test_schema_violation_raises_parse_error(content: str) -> None:
-    extractor = make_extractor(lambda request: openai_reply(content))
+    extractor = make_extractor(lambda request: ollama_reply(content))
     with pytest.raises(IntentParseError) as exc_info:
         extractor.extract("질문")
     assert exc_info.value.__cause__ is not None
 
 
 # 문제 17 (IE-09, 13): 응답 구조가 이상하면 IntentParseError
-# 함정: choices가 빈 리스트면 [0]에서 IndexError가 난다 (KeyError·TypeError만 잡으면 새어 나감)
-# 함정: 모델이 답을 거부하면 content가 null(None)로 온다
+# 함정: message가 문자열이면 ["content"]에서 TypeError가 난다 (KeyError만 잡으면 새어 나감)
 @pytest.mark.parametrize(
     "response",
     [
         httpx.Response(200, text="not json"),  # 본문이 JSON 아님
-        httpx.Response(200, json={}),  # choices 없음
-        httpx.Response(200, json={"choices": []}),  # choices가 비어 있음
-        httpx.Response(200, json={"choices": [{}]}),  # message 없음
-        httpx.Response(200, json={"choices": "문자열"}),  # 구조가 다름
-        openai_reply(None),  # 거부(refusal) 등으로 content가 null
-        httpx.Response(200, json={"choices": [{"message": {"content": 123}}]}),  # 문자열 아님
+        httpx.Response(200, json={}),  # message 없음
+        httpx.Response(200, json={"message": {}}),  # content 없음
+        httpx.Response(200, json={"message": "문자열"}),  # 구조가 다름
+        httpx.Response(200, json=[]),  # 객체가 아니라 배열
+        ollama_reply(None),  # content가 null
+        httpx.Response(200, json={"message": {"content": 123}}),  # 문자열 아님
     ],
 )
 def test_malformed_response_raises_parse_error(response: httpx.Response) -> None:
@@ -313,13 +309,143 @@ def test_transport_error_raises_llm_unavailable(error_type: type[httpx.Transport
 
 
 # 문제 19 (IE-11, 12): HTTP 4xx·5xx이면 LlmUnavailableError (본문이 정상 모양이어도)
-# 401 = API 키 오류, 429 = 사용량 초과, 500·503 = OpenAI 서버 오류
-@pytest.mark.parametrize("status", [400, 401, 429, 500, 503])
+# 404 = 모델이 설치되지 않음(ollama pull 필요), 500·503 = Ollama 서버 오류
+@pytest.mark.parametrize("status", [400, 404, 500, 503])
 def test_http_error_status_raises_llm_unavailable(status: int) -> None:
     def handler(request: httpx.Request) -> httpx.Response:
-        ok = openai_reply(LIST_JSON)
+        ok = ollama_reply(LIST_JSON)
         return httpx.Response(status, content=ok.content, headers=ok.headers)
 
     with pytest.raises(LlmUnavailableError) as exc_info:
         make_extractor(handler).extract("질문")
     assert isinstance(exc_info.value.__cause__, httpx.HTTPStatusError)
+
+
+# ───────────── 2026-11-11 보강: 작은 로컬 모델이 지어낸 값 걸러내기 ─────────────
+# qwen2.5:7b가 질문에 없는 기준일·단계별 속성을 채워 넣었다. 그대로 두면 틀린 SQL이
+# 정상처럼 나가므로, 질문 글자에 근거가 없는 값은 추출기가 지운다 (거절하지 않고 나머지는 쓴다)
+
+
+# 문제 20: 기준일의 연도가 질문에 없으면 지운다 (지어낸 날짜로 거르는 일을 막는다)
+def test_invented_base_date_is_dropped() -> None:
+    content = (
+        '{"kind": "lookup", "target_type": "기본상품", "code": "BP001", "base_date": "20230315"}'
+    )
+    result = make_extractor(lambda request: ollama_reply(content)).extract("BP001 기본상품 알려줘")
+    assert result.base_date is None
+    assert result.code == "BP001"
+
+
+# 문제 21: 질문에 연도가 있으면 기준일을 그대로 쓴다
+def test_base_date_with_year_in_question_is_kept() -> None:
+    content = (
+        '{"kind": "lookup", "target_type": "기본상품", "code": "BP001", "base_date": "20260101"}'
+    )
+    extractor = make_extractor(lambda request: ollama_reply(content))
+    result = extractor.extract("2026년 1월 1일 기준 BP001 기본상품 알려줘")
+    assert result.base_date == "20260101"
+
+
+# 문제 22: 단계별 속성은 질문에 나온 항목만 남긴다. 다 지워진 단계는 빼고, 하나도 없으면 None
+# (항목을 말하지 않으면 None → 빌더가 단계마다 항목을 전부 꺼낸다)
+@pytest.mark.parametrize(
+    ("question", "expected"),
+    [
+        ("BP001 기본상품 → 부가옵션 구조의 속성값 출력", None),
+        ("BP001 기본상품 → 부가옵션 구조의 옵션 요금 출력", {"부가옵션": ["옵션요금"]}),
+    ],
+)
+def test_path_attributes_not_in_question_are_dropped(
+    question: str, expected: dict[str, list[str]] | None
+) -> None:
+    content = (
+        '{"kind": "hierarchy", "target_type": "기본상품", "code": "BP001", "path": ["부가옵션"], '
+        '"path_attributes": {"기본상품": ["약정기간"], "부가옵션": ["옵션요금", "보험료"]}}'
+    )
+    result = make_extractor(lambda request: ollama_reply(content)).extract(question)
+    assert result.path_attributes == expected
+    assert result.path == ["부가옵션"]
+
+
+# 문제 23: 항목명칭은 질문 글자 그대로 쓰라는 규칙과, 이름 검색 + 속성 예시가 프롬프트에 있다
+def test_prompt_guides_small_model() -> None:
+    prompt = build_system_prompt(sample_profile())
+    assert "질문에 쓴 글자 그대로" in prompt
+    assert "질문: 프리미엄 들어간 기본상품의 약정기간 알려줘" in prompt
+    assert (
+        '출력: {"kind": "attribute", "target_type": "기본상품", "name_keyword": "프리미엄", '
+        '"attributes": ["약정기간"]}'
+    ) in prompt
+
+
+# ───────────── 2026-11-11: 모델 상주(keep_alive)와 예열 ─────────────
+# CPU에서 첫 질문이 약 1분 걸렸다. 대부분은 모델 로드(9초)가 아니라 시스템 프롬프트를
+# 처음 읽는 시간(47초)이다. Ollama는 한 번 읽은 앞부분을 캐시하므로, 모델을 내리지 않고
+# (keep_alive) 앱 시작 때 같은 프롬프트로 한 번 불러 두면(예열) 이후 질문이 빨라진다
+
+
+# 문제 24: 요청에 keep_alive를 싣는다. 기본은 -1 (모델을 내리지 않음)
+def test_request_has_keep_alive_default() -> None:
+    requests: list[httpx.Request] = []
+    make_extractor(capture(requests, LIST_JSON)).extract("기본상품 목록")
+    assert json.loads(requests[0].content)["keep_alive"] == -1
+
+
+# 문제 25: 생성자로 받은 keep_alive를 그대로 싣는다
+def test_request_uses_given_keep_alive() -> None:
+    requests: list[httpx.Request] = []
+    client = httpx.Client(
+        base_url="http://ollama.test", transport=httpx.MockTransport(capture(requests, LIST_JSON))
+    )
+    OllamaIntentExtractor(client, MODEL, sample_profile(), keep_alive="30m").extract("목록")
+    assert json.loads(requests[0].content)["keep_alive"] == "30m"
+
+
+# 문제 26: 예열은 실제 질문과 같은 시스템 프롬프트·스키마·keep_alive로 한 번 요청한다
+# (시스템 프롬프트가 같아야 캐시가 다음 질문에 다시 쓰인다)
+def test_warm_up_sends_same_prompt() -> None:
+    requests: list[httpx.Request] = []
+    make_extractor(capture(requests, LIST_JSON)).warm_up()
+
+    assert len(requests) == 1
+    body = json.loads(requests[0].content)
+    assert requests[0].url.path == "/api/chat"
+    assert body["messages"][0] == {
+        "role": "system",
+        "content": build_system_prompt(sample_profile()),
+    }
+    assert body["format"] == build_intent_schema(sample_profile())
+    assert body["keep_alive"] == -1
+
+
+# 문제 27: 예열은 답 내용을 쓰지 않는다 (JSON이 아니어도 예외 없음)
+def test_warm_up_ignores_content() -> None:
+    make_extractor(lambda request: ollama_reply("아무 글자")).warm_up()
+
+
+# 문제 28: 예열 중 서버 연결 실패는 LlmUnavailableError (원래 예외가 __cause__)
+def test_warm_up_raises_when_server_is_down() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("서버 응답 없음", request=request)
+
+    with pytest.raises(LlmUnavailableError) as exc_info:
+        make_extractor(handler).warm_up()
+    assert isinstance(exc_info.value.__cause__, httpx.ConnectError)
+
+
+# 문제 29: 예열은 프롬프트를 처음 읽느라 오래 걸리므로(CPU에서 약 100초)
+# 따로 긴 타임아웃(300초)을 쓴다
+# 실제 질문은 client에 설정한 타임아웃 그대로다
+def test_warm_up_uses_longer_timeout() -> None:
+    requests: list[httpx.Request] = []
+    client = httpx.Client(
+        base_url="http://ollama.test",
+        timeout=120,
+        transport=httpx.MockTransport(capture(requests, LIST_JSON)),
+    )
+    extractor = OllamaIntentExtractor(client, MODEL, sample_profile())
+    extractor.warm_up()
+    extractor.extract("기본상품 목록")
+
+    assert requests[0].extensions["timeout"]["read"] == 300.0
+    assert requests[1].extensions["timeout"]["read"] == 120.0

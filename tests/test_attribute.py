@@ -36,7 +36,7 @@ from text_to_sql.repositories.metadata_repository import (
 )
 from text_to_sql.services.intent_extractor import (
     FakeIntentExtractor,
-    OpenAiIntentExtractor,
+    OllamaIntentExtractor,
     build_system_prompt,
 )
 from text_to_sql.services.sql_builder import SqlBuilder, render_sql
@@ -388,18 +388,18 @@ def test_prompt_without_items() -> None:
     assert '{"kind": "attribute"' not in prompt
 
 
-# 문제 34: OpenAI가 attribute JSON을 돌려주면 attributes가 담긴 Intent가 된다
-def test_openai_parses_attribute_intent() -> None:
+# 문제 34: Ollama가 attribute JSON을 돌려주면 attributes가 담긴 Intent가 된다
+def test_ollama_parses_attribute_intent() -> None:
     content = (
         '{"kind": "attribute", "target_type": "기본상품", "code": "BP001", '
         '"attributes": ["약정기간"]}'
     )
 
     def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json={"choices": [{"message": {"content": content}}]})
+        return httpx.Response(200, json={"message": {"role": "assistant", "content": content}})
 
-    client = httpx.Client(base_url="http://openai.test/v1", transport=httpx.MockTransport(handler))
-    extractor = OpenAiIntentExtractor(client, "gpt-test", load_site_profile(SAMPLE_PATH))
+    client = httpx.Client(base_url="http://ollama.test", transport=httpx.MockTransport(handler))
+    extractor = OllamaIntentExtractor(client, "qwen-test", load_site_profile(SAMPLE_PATH))
     assert extractor.extract("BP001 약정기간") == attribute()
 
 

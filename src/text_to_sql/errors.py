@@ -5,7 +5,8 @@
 - IntentParseError: LLM 출력이 JSON/스키마 위반
 - LlmUnavailableError: LLM 서버 연결 실패
 - SqlValidationError: 생성된 SQL이 검증기에서 차단됨
-- ConfigError: 환경변수 설정 누락·형식 오류 (앱 시작 시)"""
+- ConfigError: 환경변수 설정 누락·형식 오류 (앱 시작 시)
+- ProfileSourceError: 프로필 출처(구글 시트·CSV 폴더)를 읽지 못함 (동기화 도구)"""
 
 
 class UnsupportedQuestionError(Exception):
@@ -29,4 +30,8 @@ class SqlValidationError(Exception):
 
 
 class ConfigError(Exception):
+    pass
+
+
+class ProfileSourceError(Exception):
     pass

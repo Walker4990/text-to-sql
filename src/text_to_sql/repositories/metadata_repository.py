@@ -1,11 +1,14 @@
-"""MetadataRepository 인터페이스(Protocol)와 JSON 파일 구현.
+"""공통 메타데이터·사이트 프로필 모델과 읽기.
 
-- load(): 공통 메타데이터 + SITE 프로필을 합쳐 반환
-- 나중에 구글 시트 구현체로 교체할 수 있도록 인터페이스를 먼저 정의한다"""
+- load_site_profile(path): 스냅샷 JSON 파일을 읽어 parse_site_profile에 넘긴다
+- parse_site_profile(data, origin): 파일과 무관하게 dict를 검사·변환한다.
+  동기화 도구(text_to_sql.sync)가 구글 시트에서 만든 프로필도 같은 검사를 거친다
+- 출처(시트·CSV) 교체 지점은 repositories/profile_source.py의 ProfileSource"""
 
 import json
 import re
 from dataclasses import dataclass, field
+from typing import Literal
 
 from text_to_sql.errors import MetadataError, UnsupportedQuestionError
 
@@ -14,14 +17,19 @@ _ITEM_NAME = re.compile(r"[가-힣A-Za-z0-9_]{1,30}")
 _ITEM_COLUMN = re.compile(r"(?:CHAR|TEXT|DESC)\d{2,3}")
 
 
+# 항목 값 형식. number면 값 조건에서 숫자로 변환해 비교한다
+ItemType = Literal["text", "number"]
+ITEM_TYPES: tuple[ItemType, ...] = ("text", "number")
+
+
 @dataclass(frozen=True)
 class ItemDef:
     column: str
     multi: bool = False
+    type: ItemType = "text"
 
 
-# [스프링] Lombok @Data를 붙인 VO 클래스. 필드는 site, types, aliases 3개
-# @dataclass가 생성자/equals/toString을 자동으로 만들어 준다
+# 사이트 프로필: 현장마다 다른 유형 번호(TYPEID)·별칭·테이블 별칭·항목 정의
 @dataclass
 class SiteProfile:
     site: str
@@ -30,8 +38,9 @@ class SiteProfile:
     table_aliases: dict[str, str] = field(default_factory=lambda: dict(DEFAULT_TABLE_ALIASES))
     items: dict[str, dict[str, ItemDef]] = field(default_factory=dict)
     registered_items: list[str] = field(default_factory=list)
+    # 스냅샷 _meta.version (동기화 시각). 손으로 쓴 옛 파일은 None
+    version: str | None = None
 
-    # [스프링] public int findTypeid(String typeName) 인스턴스 메서드 (self = this)
     # 이름이나 별칭으로 TYPEID를 찾는다. 없으면 UnsupportedQuestionError
     def find_typeid(
         self,
@@ -43,8 +52,7 @@ class SiteProfile:
         except KeyError as err:
             raise UnsupportedQuestionError(f"Type not found: {type_name}") from err
 
-    # [스프링] 별칭 → 정식 이름. aliases(Map)에서 get 했는데 없으면 KeyError가 난다
-    # (자바 Map은 null을 주지만 파이썬 dict는 예외를 던짐)
+    # 별칭 → 정식 이름. 없으면 UnsupportedQuestionError
     def find_alias(self, alias_name: str) -> str:
         try:
             return self.aliases[alias_name]
@@ -87,15 +95,38 @@ class Metadata:
             raise UnsupportedQuestionError(f"Table not found: {name}") from err
 
 
-# [스프링] 클래스 밖에 있는 독립 함수. 자바라면 SiteProfile.load(path) 정적 팩토리 메서드
 # JSON 파일을 읽어 SiteProfile을 만든다. 문제가 있으면 전부 MetadataError로 바꿔 던진다
 def load_site_profile(path: str) -> SiteProfile:
     try:
-        # [스프링] try-with-resources. 블록이 끝나면 파일이 자동으로 닫힌다
         with open(path, encoding="utf-8") as f:
-            # [스프링] Jackson readValue와 같다. 결과는 Map(dict)
             data = json.load(f)
-        # [스프링] for (Map.Entry e : aliases.entrySet()). 별칭이 없는 유형을 가리키면 거부
+    except FileNotFoundError as err:
+        raise MetadataError(f"File not found: {path}") from err
+    except json.JSONDecodeError as err:
+        raise MetadataError(f"Invalid JSON format in file: {path}") from err
+    return parse_site_profile(data, path)
+
+
+def _read_version(data: dict[str, object], origin: str) -> str | None:
+    """스냅샷 _meta.version. _meta가 없으면 None (손으로 쓴 옛 파일)."""
+    meta = data.get("_meta")
+    if meta is None:
+        return None
+    if not isinstance(meta, dict):
+        raise MetadataError(f"_meta must be an object in file: {origin}")
+    version = meta.get("version")
+    if version is not None and not isinstance(version, str):
+        raise MetadataError(f"_meta.version must be a string in file: {origin}")
+    return version
+
+
+# 파일을 읽지 않고 dict만 검사·변환한다. origin은 오류 메시지에 쓸 출처 (파일 경로, sheet:<사이트>)
+def parse_site_profile(data: object, origin: str) -> SiteProfile:
+    if not isinstance(data, dict):
+        raise MetadataError(f"Profile must be a JSON object in file: {origin}")
+    path = origin
+    try:
+        # 별칭이 없는 유형을 가리키면 거부
         for alias, type_name in data["aliases"].items():
             if type_name not in data["types"]:
                 raise MetadataError(
@@ -128,7 +159,10 @@ def load_site_profile(path: str) -> SiteProfile:
                 multi = spec.get("multi", False)
                 if not isinstance(multi, bool):
                     raise MetadataError(f"multi must be true/false in file: {path}")
-                items[type_name][item_name] = ItemDef(column=column, multi=multi)
+                item_type = spec.get("type", "text")
+                if item_type not in ITEM_TYPES:
+                    raise MetadataError(f"item type must be text or number in file: {path}")
+                items[type_name][item_name] = ItemDef(column=column, multi=multi, type=item_type)
 
         registered_items = data.get("registered_items", [])
         if not isinstance(registered_items, list):
@@ -137,7 +171,7 @@ def load_site_profile(path: str) -> SiteProfile:
             if not isinstance(name, str) or not _ITEM_NAME.fullmatch(name):
                 raise MetadataError(f"Invalid registered item '{name}' in file: {path}")
 
-        # [스프링] new SiteProfile(site, types, aliases). data["키"]에 키가 없으면 KeyError
+        # 필수 키(site, types, aliases)가 없으면 KeyError → MetadataError
         return SiteProfile(
             site=data["site"],
             types=data["types"],
@@ -145,13 +179,8 @@ def load_site_profile(path: str) -> SiteProfile:
             table_aliases=table_aliases,
             items=items,
             registered_items=registered_items,
+            version=_read_version(data, path),
         )
-    # [스프링] catch (FileNotFoundException e) { throw new MetadataException(msg, e); }
-    # "from err"는 원래 예외를 cause로 연결한다 (new X(msg, cause))
-    except FileNotFoundError as err:
-        raise MetadataError(f"File not found: {path}") from err
-    except json.JSONDecodeError as err:
-        raise MetadataError(f"Invalid JSON format in file: {path}") from err
     except KeyError as err:
         raise MetadataError(f"Missing required keys in JSON file: {path}") from err
 

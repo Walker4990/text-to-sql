@@ -15,10 +15,15 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# 구글 시트 동기화 도구(python -m text_to_sql.sync)를 돌리는 곳에만 설치한다. 챗봇은 필요 없다
+sheets = [
+    "gspread>=6.1",
+]
 dev = [
     "pytest>=8",
     "ruff>=0.7",
     "mypy>=1.13",
+    "gspread>=6.1",  # sheet_source.py 테스트·타입 검사용
 ]
 
 [tool.setuptools.packages.find]
