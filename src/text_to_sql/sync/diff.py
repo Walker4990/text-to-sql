@@ -46,6 +46,15 @@ def diff_profiles(old: SiteProfile | None, new: SiteProfile) -> list[Change]:
     )
     changes += _diff_items(_flat_items(old) if old else {}, _flat_items(new))
     changes += _diff_registered(old.registered_items if old else [], new.registered_items)
+    # alias는 API 송수신용이라 SQL이 바뀌지 않는다 → 위험 아님
+    changes += _diff_map(
+        "항목 alias",
+        old.registered_aliases if old else {},
+        new.registered_aliases,
+        str,
+        remove_risky=False,
+        change_risky=False,
+    )
     changes += _diff_map(
         "테이블별칭",
         old.table_aliases if old else DEFAULT_TABLE_ALIASES,

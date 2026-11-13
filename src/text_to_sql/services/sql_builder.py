@@ -56,20 +56,15 @@ class SqlBuilder:
     # ───── 값 조건 ─────
 
     def _number_column(self, column: str) -> str:
-        """문자열 컬럼을 숫자로 바꾸는 식.
+        """문자열 컬럼을 숫자로 바꾸는 식 (정규식 검사 없이 바로 변환).
 
-        숫자가 아닌 값은 오류 대신 NULL이 되어 비교에서 빠진다."""
+        숫자 항목 컬럼에는 숫자만 들어 있다고 본다.
+        숫자가 아닌 값이 있으면 DB가 변환 오류를 낸다."""
         dialect = self.common.dialect.lower()
         if dialect == "postgresql":
-            return (
-                rf"CASE WHEN {column} ~ '^-?[0-9]+(\.[0-9]+)?$' "
-                f"THEN CAST({column} AS NUMERIC) END"
-            )
+            return f"CAST({column} AS NUMERIC)"
         if dialect == "oracle":
-            return (
-                rf"CASE WHEN REGEXP_LIKE({column}, '^-?[0-9]+(\.[0-9]+)?$') "
-                f"THEN TO_NUMBER({column}) END"
-            )
+            return f"TO_NUMBER({column})"
         raise UnsupportedQuestionError(
             f"값 조건을 지원하지 않는 DB 방언입니다: {self.common.dialect}"
         )
@@ -90,8 +85,10 @@ class SqlBuilder:
         condition: Condition,
         params: dict[str, object],
     ) -> str:
-        """조건 하나를 WHERE 조각으로 만든다. 값은 바인드 변수 cond_N으로만 넣는다."""
-        name = f"cond_{number}"
+        """조건 하나를 WHERE 조각으로 만든다.
+
+        왼쪽은 표준항목 컬럼, 오른쪽은 질문에 적힌 값(바인드 변수 cond_N) 또는
+        입력으로 받을 항목명칭(룰 변수 <$@[이름]@$>)이다."""
         column = f"{alias}.{item.column}"
         if item.type == "number":
             symbol = _NUMBER_OPS.get(condition.op)
@@ -99,26 +96,52 @@ class SqlBuilder:
                 raise UnsupportedQuestionError(
                     f"'{condition.item}'은(는) 숫자 항목이라 '{condition.op}' 조건을 쓸 수 없습니다"
                 )
-            if not _NUMBER_VALUE.fullmatch(condition.value):
+            left = self._number_column(column)
+        else:
+            if condition.op == "contains":
+                if condition.value is None:
+                    raise UnsupportedQuestionError("입력값으로 받는 포함 조건은 지원하지 않습니다")
+                params[f"cond_{number}"] = f"%{_escape_like(condition.value)}%"
+                return f"{column} LIKE :cond_{number} ESCAPE '\\'"
+            text_symbol = _TEXT_OPS.get(condition.op)
+            if text_symbol is None:
                 raise UnsupportedQuestionError(
-                    f"숫자 조건의 값이 숫자 형식이 아닙니다: {condition.value}"
+                    f"'{condition.item}'은(는) 문자 항목이라 '{condition.op}' 조건을 쓸 수 없습니다"
                 )
-            expr = self._number_column(column)
-            if "." in condition.value:
-                params[name] = condition.value
-                return f"{expr} {symbol} {self._number_param(name)}"
-            params[name] = int(condition.value)
-            return f"{expr} {symbol} :{name}"
-        if condition.op == "contains":
-            params[name] = f"%{_escape_like(condition.value)}%"
-            return f"{column} LIKE :{name} ESCAPE '\\'"
-        text_symbol = _TEXT_OPS.get(condition.op)
-        if text_symbol is None:
-            raise UnsupportedQuestionError(
-                f"'{condition.item}'은(는) 문자 항목이라 '{condition.op}' 조건을 쓸 수 없습니다"
-            )
-        params[name] = condition.value
-        return f"{column} {text_symbol} :{name}"
+            symbol, left = text_symbol, column
+        if condition.value_item is not None:
+            return f"{left} {self._input_value(condition, symbol)}"
+        return f"{left} {self._literal_value(item, number, condition, symbol, params)}"
+
+    def _input_value(self, condition: Condition, symbol: str) -> str:
+        """입력으로 받는 값: 항목 탭에 등록된 이름만, 따옴표·CAST 없이 룰 변수로."""
+        name = self.profile.find_registered_item(str(condition.value_item))
+        if condition.value_multi:
+            if condition.op != "eq":
+                raise UnsupportedQuestionError("여러 값으로 받는 조건은 '같음'만 지원합니다")
+            return f"IN (<$@distinct([{name}].array)@$>)"
+        return f"{symbol} <$@[{name}]@$>"
+
+    def _literal_value(
+        self,
+        item: ItemDef,
+        number: int,
+        condition: Condition,
+        symbol: str,
+        params: dict[str, object],
+    ) -> str:
+        """질문에 적힌 값: 바인드 변수 cond_N으로만 넣는다."""
+        name, value = f"cond_{number}", str(condition.value)
+        if item.type != "number":
+            params[name] = value
+            return f"{symbol} :{name}"
+        if not _NUMBER_VALUE.fullmatch(value):
+            raise UnsupportedQuestionError(f"숫자 조건의 값이 숫자 형식이 아닙니다: {value}")
+        if "." in value:
+            params[name] = value
+            return f"{symbol} {self._number_param(name)}"
+        params[name] = int(value)
+        return f"{symbol} :{name}"
 
     def _resolve_own_conditions(self, intent: Intent) -> list[_Resolved]:
         """list·attribute: 조건 항목은 모두 target_type의 항목이어야 한다."""

@@ -41,6 +41,7 @@ def profile_to_data(profile: SiteProfile) -> dict[str, object]:
         "table_aliases": dict(profile.table_aliases),
         "items": items,
         "registered_items": list(profile.registered_items),
+        "registered_aliases": dict(profile.registered_aliases),
     }
 
 
@@ -73,8 +74,11 @@ def profile_to_tabs(profile: SiteProfile, owner: str | None = None) -> Tabs:
         for name, item in type_items.items():
             kind = "숫자" if item.type == "number" else "문자"
             items.append([type_name, name, item.column, "Y" if item.multi else "N", kind, "Y", ""])
-    registered = [["항목명칭", "사용", "설명"]]
-    registered += [[name, "Y", ""] for name in profile.registered_items]
+    registered = [["항목명칭", "alias", "사용", "설명"]]
+    registered += [
+        [name, profile.registered_aliases.get(name, ""), "Y", ""]
+        for name in profile.registered_items
+    ]
     table_aliases = [["역할", "별칭", "설명"]]
     table_aliases += [[role, profile.table_aliases[role], ""] for role in DEFAULT_TABLE_ALIASES]
     return {

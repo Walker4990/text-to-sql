@@ -15,6 +15,8 @@ from text_to_sql.errors import MetadataError, UnsupportedQuestionError
 DEFAULT_TABLE_ALIASES = {"main": "M", "parent": "P", "inv": "I", "child": "C", "detail": "D"}
 _ITEM_NAME = re.compile(r"[가-힣A-Za-z0-9_]{1,30}")
 _ITEM_COLUMN = re.compile(r"(?:CHAR|TEXT|DESC)\d{2,3}")
+# 등록 항목 alias: camelCase (소문자로 시작, 영문·숫자)
+ALIAS_PATTERN = re.compile(r"[a-z][A-Za-z0-9]{0,49}")
 
 
 # 항목 값 형식. number면 값 조건에서 숫자로 변환해 비교한다
@@ -38,6 +40,8 @@ class SiteProfile:
     table_aliases: dict[str, str] = field(default_factory=lambda: dict(DEFAULT_TABLE_ALIASES))
     items: dict[str, dict[str, ItemDef]] = field(default_factory=dict)
     registered_items: list[str] = field(default_factory=list)
+    # 등록 항목명칭 → camelCase alias (API 송수신용. SQL에는 항목명칭을 쓴다)
+    registered_aliases: dict[str, str] = field(default_factory=dict)
     # 스냅샷 _meta.version (동기화 시각). 손으로 쓴 옛 파일은 None
     version: str | None = None
 
@@ -170,6 +174,7 @@ def parse_site_profile(data: object, origin: str) -> SiteProfile:
         for name in registered_items:
             if not isinstance(name, str) or not _ITEM_NAME.fullmatch(name):
                 raise MetadataError(f"Invalid registered item '{name}' in file: {path}")
+        registered_aliases = _parse_registered_aliases(data, registered_items, path)
 
         # 필수 키(site, types, aliases)가 없으면 KeyError → MetadataError
         return SiteProfile(
@@ -179,10 +184,32 @@ def parse_site_profile(data: object, origin: str) -> SiteProfile:
             table_aliases=table_aliases,
             items=items,
             registered_items=registered_items,
+            registered_aliases=registered_aliases,
             version=_read_version(data, path),
         )
     except KeyError as err:
         raise MetadataError(f"Missing required keys in JSON file: {path}") from err
+
+
+def _parse_registered_aliases(
+    data: dict[str, object], registered_items: list[str], origin: str
+) -> dict[str, str]:
+    """registered_aliases: {항목명칭: camelCase alias}. 없으면 빈 사전.
+
+    등록된 항목명칭만, alias 형식(camelCase)과 중복을 검사한다."""
+    raw = data.get("registered_aliases", {})
+    if not isinstance(raw, dict):
+        raise MetadataError(f"registered_aliases must be an object in file: {origin}")
+    aliases: dict[str, str] = {}
+    for name, alias in raw.items():
+        if name not in registered_items:
+            raise MetadataError(f"Alias for unregistered item '{name}' in file: {origin}")
+        if not isinstance(alias, str) or not ALIAS_PATTERN.fullmatch(alias):
+            raise MetadataError(f"Invalid alias '{alias}' (camelCase) in file: {origin}")
+        if alias in aliases.values():
+            raise MetadataError(f"Duplicate alias '{alias}' in file: {origin}")
+        aliases[name] = alias
+    return aliases
 
 
 def load_common_metadata(path: str) -> Metadata:

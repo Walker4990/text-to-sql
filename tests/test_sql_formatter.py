@@ -99,8 +99,8 @@ def test_literals_untouched(condition: str) -> None:
 # 문제 6: CASE … END와 괄호 안은 나누지 않는다
 def test_case_expression_not_split() -> None:
     condition = (
-        "CASE WHEN D1.CHAR01 ~ '^-?[0-9]+(\\.[0-9]+)?$' "
-        "THEN CAST(D1.CHAR01 AS NUMERIC) END <= 30000"
+        "CASE WHEN D1.CHAR01 = '' THEN NULL "
+        "ELSE CAST(D1.CHAR01 AS NUMERIC) END <= 30000"
     )
     sql = f"SELECT L0.SID FROM OBJ_MAIN L0 WHERE L0.TYPEID = 2100 AND {condition}"
     assert format_sql(sql).splitlines()[-1] == f"  AND {condition}"

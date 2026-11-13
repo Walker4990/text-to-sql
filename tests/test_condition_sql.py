@@ -60,12 +60,25 @@ def builder(dialect: str = "postgresql") -> SqlBuilder:
     return SqlBuilder(common(dialect), PROFILE)
 
 
+# 숫자 항목은 정규식 검사 없이 컬럼을 바로 숫자로 바꿔 비교한다 (현장 SQL은 정규식을 쓰지 않음)
 def pg_num(column: str) -> str:
-    return rf"CASE WHEN {column} ~ '^-?[0-9]+(\.[0-9]+)?$' THEN CAST({column} AS NUMERIC) END"
+    return f"CAST({column} AS NUMERIC)"
 
 
 def oracle_num(column: str) -> str:
-    return rf"CASE WHEN REGEXP_LIKE({column}, '^-?[0-9]+(\.[0-9]+)?$') THEN TO_NUMBER({column}) END"
+    return f"TO_NUMBER({column})"
+
+
+# 문제 0: 생성된 값 조건 SQL에 정규식(~, REGEXP_LIKE)이 들어가지 않는다
+@pytest.mark.parametrize("dialect", ["postgresql", "oracle"])
+def test_number_condition_has_no_regex(dialect: str) -> None:
+    intent = Intent(
+        kind="list", target_type="연회비", conditions=[c("국내전용연회비", "le", "30000")]
+    )
+    sql = builder(dialect).build(intent).sql
+    assert "~" not in sql
+    assert "REGEXP_LIKE" not in sql
+    assert "CASE WHEN" not in sql
 
 
 def c(item: str, op: str, value: str) -> Condition:

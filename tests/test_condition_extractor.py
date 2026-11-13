@@ -56,7 +56,8 @@ def test_schema_condition_shape() -> None:
     assert (spec["minItems"], spec["maxItems"]) == (1, 5)
     item = spec["items"]
     assert item["additionalProperties"] is False
-    assert set(item["required"]) == {"item", "op", "value"}
+    # 값은 value(질문에 적힌 값) 또는 value_item(입력 항목명칭) 중 하나라 필수는 item·op뿐
+    assert set(item["required"]) == {"item", "op"}
     assert set(item["properties"]["item"]["enum"]) == {
         "카드등급",
         "국내전용연회비",

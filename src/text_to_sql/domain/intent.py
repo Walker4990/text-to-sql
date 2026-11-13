@@ -23,11 +23,25 @@ CONDITION_KINDS = ("list", "attribute", "hierarchy")
 class Condition(BaseModel):
     """항목 값 조건 한 개 (예: 국내전용연회비 <= 30000).
 
+    값은 둘 중 하나다.
+    - value: 질문에 적힌 값 (바인드 변수로 들어간다)
+    - value_item: 입력으로 받을 항목명칭 (항목 탭에 등록된 이름, 룰 변수 <$@[이름]@$>로 들어간다)
+    value_multi는 value_item을 여러 개로 받을 때 True (모델이 아니라 추출기가 질문 글자로 정한다).
     숫자 형식 검사는 항목 형식을 아는 빌더가 한다."""
 
     item: str = Field(pattern=CODE_ITEM_PATTERN)
     op: Literal["eq", "ne", "lt", "le", "gt", "ge", "contains"]
-    value: str = Field(min_length=1, max_length=50)
+    value: str | None = Field(default=None, min_length=1, max_length=50)
+    value_item: str | None = Field(default=None, pattern=CODE_ITEM_PATTERN)
+    value_multi: bool = False
+
+    @model_validator(mode="after")
+    def check_value(self) -> Self:
+        if (self.value is None) == (self.value_item is None):
+            raise ValueError("조건에는 value와 value_item 중 하나만 있어야 합니다.")
+        if self.value_multi and self.value_item is None:
+            raise ValueError("value_multi는 value_item에만 쓸 수 있습니다.")
+        return self
 
 
 class Intent(BaseModel):

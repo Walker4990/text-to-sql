@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 
 from text_to_sql.errors import MetadataError
 from text_to_sql.repositories.metadata_repository import (
+    ALIAS_PATTERN,
     DEFAULT_TABLE_ALIASES,
     SiteProfile,
     parse_site_profile,
@@ -106,7 +107,7 @@ class _Builder:
         types, disabled = self._types()
         aliases = self._aliases(types, disabled)
         items = self._items(types, disabled)
-        registered = self._registered()
+        registered, registered_aliases = self._registered()
         table_aliases = self._table_aliases()
         if self.errors:
             return self._result(None, owner)
@@ -118,6 +119,7 @@ class _Builder:
             "table_aliases": table_aliases,
             "items": items,
             "registered_items": registered,
+            "registered_aliases": registered_aliases,
         }
         # MV-09: 로더와 같은 검사를 한 번 더.
         # 시트 규칙과 로더 규칙이 어긋나도 잘못된 스냅샷이 저장되지 않는다
@@ -345,27 +347,42 @@ class _Builder:
             items.setdefault(type_name, {})[name] = spec
         return items
 
-    def _registered(self) -> list[str]:
-        """항목 탭(등록 항목명칭) → 항목명칭 목록.
+    def _registered(self) -> tuple[list[str], dict[str, str]]:
+        """항목 탭(등록 항목명칭) → (항목명칭 목록, {항목명칭: alias}).
 
         시트 순서를 유지한다. 첫 항목이 프롬프트 예시에 쓰인다.
+        alias 열은 선택이다. 빈 칸이면 alias 없음.
         """
         names: list[str] = []
+        aliases: dict[str, str] = {}
         seen: dict[str, int] = {}
+        seen_aliases: dict[str, int] = {}
         for row in self._rows(TAB_REGISTERED) or []:
             if not self._used(row, TAB_REGISTERED):
                 continue
-            name = row.get("항목명칭")
+            name, alias = row.get("항목명칭"), row.get("alias")
             if not _NAME.fullmatch(name):
                 message = f"항목명칭 '{name}' 형식이 맞지 않습니다 ({_NAME_RULE})"
                 self._error("MV-06", TAB_REGISTERED, row.number, message)
-            elif name in seen:
+                continue
+            if name in seen:
                 message = f"항목명칭 '{name}'이 두 번 나옵니다 ({seen[name]}행과 중복)"
                 self._error("MV-06", TAB_REGISTERED, row.number, message)
+                continue
+            seen[name] = row.number
+            names.append(name)
+            if not alias:
+                continue
+            if not ALIAS_PATTERN.fullmatch(alias):
+                message = f"alias '{alias}'는 camelCase(소문자로 시작, 영문·숫자)여야 합니다"
+                self._error("MV-06", TAB_REGISTERED, row.number, message)
+            elif alias in seen_aliases:
+                message = f"alias '{alias}'가 두 번 나옵니다 ({seen_aliases[alias]}행과 중복)"
+                self._error("MV-06", TAB_REGISTERED, row.number, message)
             else:
-                seen[name] = row.number
-                names.append(name)
-        return names
+                seen_aliases[alias] = row.number
+                aliases[name] = alias
+        return names, aliases
 
     def _table_aliases(self) -> dict[str, str]:
         """테이블별칭 탭 → 기본값(M/P/I/C/D)에 적은 역할만 덮어쓴다."""
