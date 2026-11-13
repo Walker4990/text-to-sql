@@ -1,156 +1,130 @@
-# 문서 챗봇 + Text-to-SQL
+# PF Text-to-SQL 시연
 
-사내 문서 질의응답 챗봇에, PF(EAV 구조) 상품 DB용 **Text-to-SQL**을 SQL 모드로 붙인 구성이다.
-LLM은 모두 **로컬 Ollama**로 돌리므로 외부 API 없이 폐쇄망에서 동작한다.
+PF(EAV 구조) 상품 DB에 대한 자연어 질문을 **상품 조회 SQL**로 바꿔 주는 챗봇입니다.
+LLM은 로컬 Ollama(qwen2.5:7b)로 돌아가며, 만든 SQL은 DB에 실행하지 않고 제공만 합니다.
 
-| 모드 | 하는 일 | 모델 |
-|---|---|---|
-| 문서 모드 | `chatbot/docs/*.txt`에서 질문과 비슷한 조각을 찾아 그 내용으로만 답한다 | 임베딩 `bge-m3`, 답변 `qwen2.5:7b` |
-| SQL 모드 | 자연어 질문을 상품 조회 SQL로 바꾼다 (SQL만 만들고 DB에 실행하지 않는다) | 의도 추출 `qwen2.5:7b` |
+## 시연 방법
 
-```
-chatbot/       웹 서버(FastAPI)·화면, 로그인, 문서 모드, SQL 모드 API
-text-to-sql/   SQL 생성 패키지 (챗봇이 가져다 쓴다)
-```
+1. https://pf-text-to-sql.tail37c7a3.ts.net 에 접속해 발급받은 계정으로 로그인합니다. (계정은 요청하시면 따로 전달드립니다)
+2. 질문창의 문서/SQL 토글을 **SQL**로 바꿉니다.
+3. 아래 예시 문장을 **그대로** 입력합니다. 질문 하나에 약 5~15초 걸립니다.
+4. 결과 SQL은 **복사** 버튼으로 DB 도구나 PF 룰에 바로 붙여 넣을 수 있습니다.
 
-## SQL 모드의 동작 방식
+> 시연 데이터는 보험·카드·증권 업권의 **가상** 프로필입니다. TYPEID 등은 실제 현장 값과 무관합니다.
 
-**LLM은 질문에서 의도(JSON)만 뽑고, SQL은 검증된 템플릿으로 조립한다.** LLM이 SQL을 직접 쓰지 않으므로
-EAV 구조의 규칙(최신 버전 조건, 구조 테이블 방향, 현장별 유형 번호)이 빠지거나 위험한 SQL이 섞이지 않는다.
+## SQL 작성 규칙
 
-```
-질문 "BP001 기본상품에 연결된 하위 오브젝트"
-  → ① 의도 추출 (Ollama)   {"kind": "structure", "target_type": "기본상품", "code": "BP001", "direction": "children"}
-  → ② SQL 조립 (템플릿)    SELECT C.SID, C.BIZCODE, C.OBJ_NAME FROM OBJ_MAIN P JOIN OBJ_INV I ... WHERE P.BIZCODE = :code ...
-  → ③ SQL 검증             SELECT만, 허용 테이블만, 주석·금지 키워드·위험 함수 차단
-  → ④ 결과                 바인드 변수 SQL + 값을 채운 복사용 SQL
-```
+- **표준항목**(DB에 있는 속성)은 쿼리의 **컬럼**으로 나옵니다. 예: 국내전용연회비 → `D1.CHAR01`
+- **입력으로 받는 값**은 **항목**(솔루션에 등록된 항목명칭)의 룰 문법으로 나옵니다. 예: `<$@[가입최저나이]@$>`
+- 여러 개로 받으면 `IN (<$@distinct([항목명칭].array)@$>)`가 됩니다.
+- 모든 테이블에 최신 버전 조건(`END_DT = '99991231'`)이 자동으로 붙습니다.
 
-| 질문 종류 | 예 |
+## 시연 예시 (단순 → 복잡)
+
+### 기본 조회
+
+| # | 질문 | 보여 주는 기능 | 결과 SQL의 핵심 |
+|---|---|---|---|
+| 1 | `INS001 보험상품 알려줘` | 코드로 단건 조회 | `TYPEID = 1100 AND BIZCODE = 'INS001'` |
+| 2 | `라이더 목록 보여줘` | 현장 용어(별칭) 인식: 라이더 → 특약 | `TYPEID = 1120`, 코드순 정렬 |
+| 3 | `CRD001 카드에 연결된 하위 오브젝트` | 구조 조회 (아래로) | OBJ_INV 조인, 부모 → 자식 |
+| 4 | `FEE01 수수료가 붙은 상위 상품` | 구조 조회 (위로) | OBJ_INV 조인, 자식 → 부모 |
+| 5 | `INS001 보험상품의 보험기간이랑 납입기간 알려줘` | 속성 값 조회 | `D.CHAR01 "보험기간", D.CHAR02 "납입기간"` |
+| 6 | `2026년 11월 12일 기준 CRD001 카드의 하위 오브젝트` | 기준일자 (유효기간) | `'20261112' BETWEEN VF_DT AND VT_DT` |
+
+### 값 조건 (질문에 적힌 값)
+
+| # | 질문 | 보여 주는 기능 | 결과 SQL의 핵심 |
+|---|---|---|---|
+| 7 | `펀드 중에 운용사에 한화가 들어간 것 목록` | 문자 속성 포함 검색 | `D.CHAR02 LIKE '%한화%'` |
+| 8 | `국내전용연회비가 30000 이하인 카드상품 목록` | 하위 유형의 숫자 조건 → 계층 조회 | `CAST(D1.CHAR01 AS NUMERIC) <= 30000` |
+
+### 룰 변수 (입력으로 받는 값)
+
+| # | 질문 | 보여 주는 기능 | 결과 SQL의 핵심 |
+|---|---|---|---|
+| 9 | `상품코드 여러 개로 보험상품의 보험기간 알려줘` | 코드를 입력으로 | `M.BIZCODE IN (<$@distinct([상품코드].array)@$>)` |
+| 10 | `운용사 항목으로 받아서 운용사가 같은 펀드 목록` | 속성 값을 입력으로 (같음) | `D.CHAR02 = <$@[운용사]@$>` |
+| 11 | `위험등급을 여러 개로 받아서 그중 하나인 펀드 목록` | 속성 값을 여러 개 입력으로 | `D.CHAR01 IN (<$@distinct([위험등급].array)@$>)` |
+| 12 | `국내전용연회비 항목으로 받아서 그 이하인 카드상품 목록` | 하위 유형 숫자 조건을 입력으로 | `CAST(D1.CHAR01 AS NUMERIC) <= <$@[국내전용연회비]@$>` |
+| 13 | `상품코드 여러 개로 보험상품의 보험기간 알려줘, 가입최저나이 항목으로 받아서 그 이상인 것만` | 코드 + 조건 값 모두 입력 | `BIZCODE IN (…[상품코드]…)` + `CAST(D.CHAR03 AS NUMERIC) >= <$@[가입최저나이]@$>` |
+| 14 | `보험상품코드를 다중값으로 받고, 주계약 특약 보장 구조의 속성값들을 출력` | 룰 변수 + 4단계 계층 + 단계별 속성 | `L0.BIZCODE IN (<$@distinct([보험상품코드].array)@$>)` |
+
+### 지원하지 않는 질문
+
+| 질문 | 결과 |
 |---|---|
-| 단건 조회 | `INS001 보험상품 알려줘`, `글로벌 들어간 펀드 찾아줘` |
-| 목록 | `라이더 목록 보여줘` |
-| 구조 (하위·상위) | `CRD001 카드에 연결된 하위 오브젝트`, `FEE01 수수료가 붙은 상위 상품` |
-| 속성 값 | `INS001 보험상품의 보험기간이랑 납입기간 알려줘` |
-| 여러 단계 계층 + 속성 | `보험상품코드를 다중값으로 받고, 주계약 특약 보장 구조의 속성값들을 출력` |
-| 룰 변수 (항목명칭) | `상품코드 여러 개로 보험상품의 보험기간 알려줘` → `M.BIZCODE IN (<$@distinct([상품코드].array)@$>)` |
-| 값 조건 | `국내전용연회비가 30000 이하인 카드상품 목록`, `운용사에 한화가 들어간 펀드` |
-| 기준일자 | `2026년 11월 12일 기준 CRD001 카드의 하위 오브젝트` (연도가 있는 날짜만) |
+| `오늘 날씨 어때` | SQL 없이 "상품 DB 질문이 아님"으로 거절 |
+| `운용사명 항목으로 받아서 운용사가 같은 펀드 목록` | 등록되지 않은 항목명칭이라 거절 |
 
-- 단일/다중: 질문에 "하나·한 개·1개·단일"이 있을 때만 `=`, 그 밖에는 `IN` 조건이 된다.
-- 지원하지 않는 질문, 목록에 없는 유형·항목은 SQL을 만들지 않고 사유와 함께 거절한다.
-- 값 조건의 항목 이름과 값이 질문에 그대로 없으면 거절한다 (단위 환산 "3만원" 등은 지원하지 않는다).
+## 결과 예시
 
-## 준비물
+### 8. 국내전용연회비가 30000 이하인 카드상품 목록
 
-- Python 3.12 이상
-- [Ollama](https://ollama.com) 와 모델 `qwen2.5:7b`, `bge-m3`
-- PostgreSQL (로그인 사용자와 질문 이력 저장)
-
-### Ollama 모델 넣기
-
-인터넷이 되는 환경이면 바로 받는다.
-
-```bash
-ollama pull qwen2.5:7b
-ollama pull bge-m3
+```sql
+SELECT
+    L0.BIZCODE "카드상품",
+    L0.OBJ_NAME "카드상품명",
+    L1.BIZCODE "연회비",
+    L1.OBJ_NAME "연회비명",
+    D1.CHAR01 "국내전용연회비",
+    D1.CHAR02 "해외겸용연회비",
+    D1.CHAR03 "가족카드연회비"
+FROM OBJ_MAIN L0
+JOIN OBJ_INV I1 ON I1.SID = L0.SID
+JOIN OBJ_MAIN L1 ON L1.SID = I1.SUBSID AND L1.TYPEID = 2120
+LEFT JOIN OBJ_DETAIL D1 ON D1.SID = L1.SID AND D1.KIND = 1 AND D1.END_DT = '99991231'
+WHERE L0.TYPEID = 2100
+  AND L0.END_DT = '99991231'
+  AND I1.END_DT = '99991231'
+  AND L1.END_DT = '99991231'
+  AND CAST(D1.CHAR01 AS NUMERIC) <= 30000
+ORDER BY L0.BIZCODE, L1.BIZCODE
 ```
 
-**폐쇄망**이면 인터넷이 되는 PC에서 위 명령으로 받은 뒤, 그 PC의 모델 폴더
-(Windows `C:\Users\<사용자>\.ollama\models`, Linux `~/.ollama/models`)를 통째로 서버의 같은 위치
-(또는 Ollama 환경변수 `OLLAMA_MODELS`가 가리키는 폴더)에 복사한다. 서버에서 `ollama list`에 두 모델이 보이면 된다.
+### 11. 위험등급을 여러 개로 받아서 그중 하나인 펀드 목록
 
-## 설치
-
-저장소 루트에서:
-
-```bash
-python -m venv .venv
-# Windows: .venv\Scripts\activate   Linux: source .venv/bin/activate
-pip install -e ./text-to-sql
-pip install -r chatbot/requirements.txt
+```sql
+SELECT M.SID, M.BIZCODE, M.OBJ_NAME, D.CHAR01 "위험등급"
+FROM OBJ_MAIN M
+JOIN OBJ_DETAIL D ON D.SID = M.SID
+WHERE M.TYPEID = 3100
+  AND D.KIND = 1
+  AND D.CHAR01 IN (<$@distinct([위험등급].array)@$>)
+  AND M.END_DT = '99991231'
+  AND D.END_DT = '99991231'
+ORDER BY M.BIZCODE
 ```
 
-## 설정
+### 13. 코드와 조건 값을 모두 입력으로
 
-`chatbot/.env.example`을 `chatbot/.env`로 복사하고 값을 채운다.
-
-| 환경변수 | 기본값 | 설명 |
-|---|---|---|
-| `OLLAMA_URL` | `http://localhost:11434` | 문서 모드가 쓰는 Ollama 주소 |
-| `OLLAMA_EMBED_MODEL` | `bge-m3` | 문서 임베딩 모델 |
-| `OLLAMA_CHAT_MODEL` | `qwen2.5:7b` | 문서 모드 답변 모델 |
-| `OLLAMA_TIMEOUT` | `180` | 문서 모드 답변 타임아웃(초) |
-| `RAG_SIMILARITY_THRESHOLD` | `0.55` | 이 점수 미만이면 답변을 만들지 않고 미답변 처리 (bge-m3 기준값) |
-| `TOP_K` | `3` | 답변 근거로 쓸 문서 조각 수 |
-| `TTS_OLLAMA_URL` | `http://localhost:11434` | SQL 모드가 쓰는 Ollama 주소 |
-| `TTS_OLLAMA_MODEL` | `qwen2.5:7b` | SQL 모드 의도 추출 모델 (채팅 모델이어야 한다) |
-| `TTS_OLLAMA_KEEP_ALIVE` | `-1` | 모델을 메모리에 남겨 둘 시간. `-1`은 계속 유지, `30m`·`2h`도 가능 |
-| `TTS_LLM_TIMEOUT` | `120` | SQL 질문 타임아웃(초). 예열 요청은 따로 300초 |
-| `TTS_SITE` | `demo` | 사이트 프로필 이름 (`text-to-sql/src/text_to_sql/metadata/sites/<이름>.json`) |
-| `TTS_METADATA_DIR` | 패키지 안 `metadata/` | 메타데이터 폴더를 따로 둘 때 |
-| `JWT_SECRET` | 없음 (필수) | 로그인 토큰 서명 키 |
-| `DATABASE_URL` | 없음 (필수) | PostgreSQL 접속 주소 |
-
-## 실행
-
-```bash
-cd chatbot
-python -m app.create_admin <아이디> <비밀번호>   # 처음 한 번, 관리자 계정 만들기
-uvicorn app.main:app --host 0.0.0.0 --port 8000
+```sql
+SELECT M.BIZCODE, M.OBJ_NAME, D.CHAR01 "보험기간", D.CHAR03 "가입최저나이"
+FROM OBJ_MAIN M
+JOIN OBJ_DETAIL D ON D.SID = M.SID
+WHERE M.TYPEID = 1100
+  AND M.BIZCODE IN (<$@distinct([상품코드].array)@$>)
+  AND D.KIND = 1
+  AND CAST(D.CHAR03 AS NUMERIC) >= <$@[가입최저나이]@$>
+  AND M.END_DT = '99991231'
+  AND D.END_DT = '99991231'
+ORDER BY M.BIZCODE
 ```
 
-브라우저에서 `http://<서버>:8000` 에 접속해 로그인하고, 질문창의 문서/SQL 토글로 모드를 고른다.
+## 입력으로 쓸 수 있는 항목명칭 (시연 프로필)
 
-- 서버가 처음 켜질 때 `chatbot/docs/*.txt`를 임베딩해 `chatbot/app/embeddings.json`에 저장한다.
-  문서를 바꾸거나 임베딩 모델을 바꾸면 이 파일을 지우고 다시 켠다 (모델이 바뀐 것은 자동으로 감지한다).
-- **예열**: 서버가 켜지면 SQL 모드용 모델을 백그라운드에서 미리 데운다. 로그에 `Ollama 예열 완료`가 찍히면
-  준비된 것이다. 예열 전에 들어온 SQL 질문은 예열이 끝날 때까지 기다린다.
-
-### 속도 참고 (GPU 없는 노트북, Ryzen 5 7530U · RAM 16GB)
-
-| 항목 | 시간 |
+| 구분 | 항목명칭 (alias) |
 |---|---|
-| SQL 모드 예열 (서버 시작 후 한 번) | 약 100초 |
-| SQL 질문 (예열 후) | 질문당 약 8~16초, 여러 단계 계층 약 30초 |
+| 코드 | 상품코드 (productCode), 보험상품코드 (insuranceProductCode), 주계약코드 (mainContractCode), 특약코드 (riderCode), 보장코드 (coverageCode), 요율코드 (rateCode), 카드상품코드 (cardProductCode), 카드혜택코드 (cardBenefitCode), 가맹점코드 (merchantCode), 펀드코드 (fundCode), ETF코드 (etfCode), 계좌상품코드 (accountProductCode), 수수료코드 (feeCode) |
+| 속성 값 | 가입최저나이 (minJoinAge), 납입주기 (paymentCycle), 특약보험료 (riderPremium), 보장금액 (coverageAmount), 카드등급 (cardGrade), 국내전용연회비 (domesticAnnualFee), 할인율 (discountRate), 운용사 (assetManager), 위험등급 (riskGrade), 총보수 (totalExpenseRatio), 최소가입금액 (minJoinAmount), 수수료율 (feeRate) |
 
-GPU가 있는 서버에서는 훨씬 짧다. 예열로 데운 상태는 Ollama 메모리에 남으므로 사용자가 접속할 때마다
-느려지지 않는다. Ollama를 다시 켜거나 서버를 재부팅하면 챗봇 서버도 다시 켜서 예열한다.
+alias는 API 송수신용 이름이고, SQL에는 항목명칭이 들어갑니다.
 
-## 사이트 프로필 (현장별 메타데이터)
+## 질문할 때 참고
 
-현장마다 유형 번호(TYPEID)·별칭·항목·테이블 별칭이 다르므로 사이트 프로필로 분리한다.
-기본 `demo`는 보험·카드·증권 시연용 **가상** 프로필이다 (TYPEID는 실제 현장 값과 무관).
-
-새 현장은 `templates/sheet_template/demo/*.csv` 양식으로 탭별 값을 채운 뒤 동기화 도구로 검증·저장한다.
-구글 시트에서 바로 읽을 수도 있다.
-
-```bash
-cd text-to-sql
-# CSV 폴더에서 읽어 검증하고 차이만 출력 (저장 안 함)
-python -m text_to_sql.sync --site <사이트> --csv-dir <CSV 폴더>
-# 저장 (TYPEID·물리컬럼 변경, 유형·항목 삭제 같은 위험 변경이 있으면 --yes도 필요)
-python -m text_to_sql.sync --site <사이트> --csv-dir <CSV 폴더> --apply
-
-# 구글 시트에서 읽을 때 (pip install -e "./text-to-sql[sheets]" 필요)
-python -m text_to_sql.sync --site <사이트> --sheet-id <ID> --credentials <서비스 계정 키.json>
-```
-
-- 탭: `설정`, `유형`, `별칭`, `표준항목`, `항목`(등록 항목명칭), `테이블별칭`
-- 종료 코드: 0 성공, 1 검증 실패, 2 출처 접근 실패, 3 위험 변경인데 `--yes` 없음
-- 저장한 뒤에는 챗봇 서버를 다시 켠다. 서버는 시작할 때 `프로필 로드 site=... version=...` 로그를 남긴다.
-
-## 오류 응답 (SQL 모드)
-
-| 상황 | 응답 |
-|---|---|
-| 빈 질문, 500자 초과 | 400 |
-| Ollama 꺼짐·모델 미설치 | 502 "LLM 서버에 연결할 수 없습니다" |
-| 생성된 SQL이 검증에 걸림 | 500 |
-| SQL 서비스 준비 실패 (설정·메타데이터 오류) | 503 (문서 모드는 계속 동작) |
-| 지원하지 않는 질문 | 정상 응답 + 사유 |
-
-## 보안
-
-- SQL 모드는 SELECT 문만 만들고 DB에 실행하지 않는다. 사용자 값은 바인드 변수로만 들어간다.
-- `chatbot/.env`, 구글 서비스 계정 키는 커밋하지 않는다 (`.gitignore`에 포함).
+- **입력값으로 받기**: "○○ 항목으로 받아서", "○○를 여러 개로 받아서"처럼 말합니다. ○○는 위 표의 항목명칭이어야 합니다.
+- **단일/다중**: 항목명칭 바로 뒤에 "여러·다중"이 있으면 `IN`, 없으면 `=`(또는 비교 연산)입니다. 코드는 "하나·한 개·단일"이라고 할 때만 `=`이고, 그 밖에는 `IN`입니다.
+- **값 조건**: 항목 이름과 값이 질문에 그대로 있어야 합니다. "3만원"처럼 단위를 붙이면 환산하지 않고 거절합니다.
+- **기준일자**: 연도가 있는 날짜만 인식합니다.
+- 목록에 없는 유형·항목이나 상품 DB와 무관한 질문은 SQL 없이 사유와 함께 거절합니다.
+- LLM 특성상 같은 질문에도 가끔 다르게 답할 수 있습니다. 결과가 이상하면 예시 문장 그대로 다시 물어봐 주세요.
